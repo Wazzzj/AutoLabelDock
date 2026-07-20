@@ -1,0 +1,25 @@
+{
+  "directories": {
+    "icon": "icon",
+    "logo": "logoicon",
+    "resources": "resources",
+    "screenshots": "resources/screenshots"
+  },
+  "app_logo_candidates": [
+    "logoicon/logo.svg",
+    "icon/logo.svg"
+  ],
+  "icons": {
+    "loading": "icon/loading.svg",
+    "tree_closed": "icon/tree_closed.svg",
+    "tree_open": "icon/tree_open.svg"
+  },
+  "screenshots": {
+    "overall": "resources/screenshots/overall.png",
+    "labeling": "resources/screenshots/labeling.png",
+    "classify": "resources/screenshots/cls.png",
+    "locateanything": "resources/screenshots/locateanything.png",
+    "train": "resources/screenshots/train.png",
+    "models": "resources/screenshots/models.png"
+  }
+}
