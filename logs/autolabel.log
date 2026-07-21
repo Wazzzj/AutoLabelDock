@@ -1,6 +1,0 @@
-[2026-07-21 08:18:48] [INFO ] [src.utils.logging_config] Logging initialized, log file: logs\autolabel.log
-[2026-07-21 08:18:48] [INFO ] [src.core.train_templates] Templates loaded: 2 from config\train_templates.json
-[2026-07-21 08:21:03] [INFO ] [src.utils.logging_config] Logging initialized, log file: logs\autolabel.log
-[2026-07-21 08:21:03] [INFO ] [src.core.train_templates] Templates loaded: 2 from config\train_templates.json
-[2026-07-21 08:22:54] [INFO ] [src.utils.logging_config] Logging initialized, log file: logs\autolabel.log
-[2026-07-21 08:22:54] [INFO ] [src.core.train_templates] Templates loaded: 2 from config\train_templates.json

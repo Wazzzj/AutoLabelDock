@@ -1,15 +1,24 @@
 {
+  "recent_projects": [],
   "theme": "dark",
   "auto_save": true,
   "default_conf_threshold": 0.5,
+  "default_iou_threshold": 0.45,
   "overlap_iou_threshold": 0.5,
   "window_geometry": {
+    "x": 120,
+    "y": 90,
+    "width": 1180,
+    "height": 760
   },
   "classify_grid_density": 96,
   "classify_grid_sort": "filename",
   "classify_preview_width": 320,
   "classify_preview_visible": true,
   "annotation_panel_splitter_sizes": [],
+  "annotation_panel_collapsed": {},
+  "last_train_config": {},
+  "model_panel_config": {},
   "script_tools": {},
   "enable_locateanything": true
 }
