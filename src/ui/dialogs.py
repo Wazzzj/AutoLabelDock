@@ -384,6 +384,11 @@ class ImportDialog(QDialog):
                 "YOLO: 选择包含 .txt 标注的目录，通常还包含 images/、labels/ "
                 "或 data.yaml。"
             )
+        elif name == "iSAT":
+            self._path_edit.setPlaceholderText("选择 iSAT 数据集目录")
+            self._help_label.setText(
+                "iSAT: 选择包含同名图片和 JSON 标注的数据集目录，通常还包含 isat.yaml。"
+            )
         else:
             self._path_edit.setPlaceholderText("选择包含 JSON 标注的目录")
             self._help_label.setText("labelme: 选择包含 .json 标注文件的目录。")

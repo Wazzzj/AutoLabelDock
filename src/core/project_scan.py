@@ -76,7 +76,7 @@ def _iter_images(directory: Path) -> list[Path]:
 
 
 def _label_dirs_for(project_dir: Path, image_dir: Path) -> list[Path]:
-    dirs: list[Path] = [image_dir]
+    dirs: list[Path] = [image_dir, project_dir]
     dirs.extend(project_dir / name for name in COMMON_LABEL_DIRS if name != ".")
     if image_dir.parent != project_dir:
         dirs.extend(image_dir.parent / name for name in COMMON_LABEL_DIRS if name != ".")

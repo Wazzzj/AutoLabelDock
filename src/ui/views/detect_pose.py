@@ -11,6 +11,7 @@ from collections import OrderedDict
 from pathlib import Path
 
 from PyQt5.QtCore import Qt, pyqtSignal, QPoint
+from PyQt5.QtGui import QCursor
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QWidget,
@@ -30,6 +31,7 @@ from PyQt5.QtWidgets import (
 )
 
 from src.core.annotation import Annotation, ImageAnnotation, Keypoint
+from src.core.annotation_classes import merged_project_annotation_classes
 from src.core.label_io import save_annotation, load_annotation
 from src.core.project import ProjectManager
 from src.core.resources import TREE_CLOSED_SVG, TREE_OPEN_SVG, stylesheet_url
@@ -504,7 +506,7 @@ class DetectPoseView(TaskView):
             QMessageBox.information(
                 self,
                 "添加图片",
-                "没有图片被添加，目标数据版本可能已有同名图片或标注。",
+                "没有图片被添加，目标数据版本可能已有同名图片。",
             )
             return
 
@@ -763,19 +765,23 @@ class DetectPoseView(TaskView):
     def _on_annotations_changed(self) -> None:
         self._sync_annotations_to_panel()
 
-    def _show_class_picker(self, default_class: str | None, px: float, py: float) -> str | None:
+    def _show_class_picker_at(
+        self,
+        default_class: str | None,
+        global_pos,
+        classes: list[str] | None = None,
+    ) -> str | None:
         if not self._project:
             return None
-        classes = self._project.config.classes
-        colors = {cls: self._project.config.get_class_color(cls) for cls in classes}
+        class_names = list(classes) if classes is not None else list(self._project.config.classes)
+        colors = {cls: self._project.config.get_class_color(cls) for cls in class_names}
 
         picker = ClassPickerPopup(
-            classes=classes,
+            classes=class_names,
             colors=colors,
             default_class=default_class,
             parent=self,
         )
-        global_pos = self._canvas.mapToGlobal(QPoint(int(px), int(py)))
         picker.move_near(global_pos)
         if not picker.exec_():
             return None
@@ -784,7 +790,7 @@ class DetectPoseView(TaskView):
         if cls_name is None:
             return None
 
-        if picker.is_new_class():
+        if picker.is_new_class() or cls_name not in self._project.config.classes:
             self._project.add_class(cls_name)
             self._project.save()
             colors[cls_name] = self._project.config.get_class_color(cls_name)
@@ -794,6 +800,10 @@ class DetectPoseView(TaskView):
             self.classes_changed.emit()
 
         return cls_name
+
+    def _show_class_picker(self, default_class: str | None, px: float, py: float) -> str | None:
+        global_pos = self._canvas.mapToGlobal(QPoint(int(px), int(py)))
+        return self._show_class_picker_at(default_class, global_pos)
 
     def _on_class_requested(self, px: float, py: float) -> None:
         cls_name = self._show_class_picker(self._last_class, px, py)
@@ -846,11 +856,7 @@ class DetectPoseView(TaskView):
         self._canvas.clear_draw_state()
 
     def _on_class_change_requested(self, ann_id: str, px: float, py: float) -> None:
-        ann = None
-        for a in self._canvas.annotations:
-            if a.id == ann_id:
-                ann = a
-                break
+        ann = next((a for a in self._canvas.annotations if a.id == ann_id), None)
         if ann is None:
             return
 
@@ -858,107 +864,24 @@ class DetectPoseView(TaskView):
         if cls_name is None or cls_name == ann.class_name:
             return
 
-        ann.class_name = cls_name
-        ann.class_id = self._project.config.get_class_id(cls_name)
+        self._apply_annotation_class_change(ann, cls_name)
+
+    def _apply_annotation_class_change(
+        self,
+        annotation: Annotation,
+        new_class: str,
+    ) -> None:
+        """Change exactly one annotation, identified by its object/unique ID."""
+        if not self._project or annotation.class_name == new_class:
+            return
+        annotation.class_name = new_class
+        annotation.class_id = self._project.config.get_class_id(new_class)
         self._push_undo()
         self._canvas.update()
         self._sync_annotations_to_panel()
 
-    def _replace_class_in_selected_images(
-        self,
-        old_class: str,
-        new_class: str,
-    ) -> tuple[int, int]:
-        """Replace one class label across the currently selected images.
-
-        The annotation that initiated the edit belongs to the focused image, so
-        the focused image is always included even when the file-list selection
-        API temporarily returns an empty selection. Other selected images are
-        loaded from disk and saved immediately.
-
-        Returns:
-            ``(changed_images, changed_annotations)``.
-        """
-        if not self._project or not self._current_image_path:
-            return 0, 0
-
-        selected_paths = list(self._file_list.get_selected_paths())
-        target_paths: list[Path] = []
-
-        # The focused image must participate because the edit was initiated
-        # from its annotation list. Preserve list order and remove duplicates.
-        for path in [self._current_image_path, *selected_paths]:
-            path = Path(path)
-            if path not in target_paths:
-                target_paths.append(path)
-
-        new_class_id = self._project.config.get_class_id(new_class)
-        changed_images = 0
-        changed_annotations = 0
-        current_changed = False
-
-        # Persist any outstanding canvas edits before touching other JSON files.
-        self._save_current()
-
-        for img_path in target_paths:
-            is_current = img_path == self._current_image_path
-
-            if is_current:
-                ia = self._current_annotation
-                if ia is None:
-                    continue
-                # Keep the canonical in-memory list aligned with the canvas.
-                ia.annotations = list(self._canvas.annotations)
-            else:
-                label_path = self._project.label_path_for(img_path)
-                ia = load_annotation(label_path)
-                if ia is None:
-                    continue
-
-            old_snapshot = self._stats_snapshot(ia.annotations)
-            changed_here = 0
-
-            for item in ia.annotations:
-                if item.class_name != old_class:
-                    continue
-                item.class_name = new_class
-                item.class_id = new_class_id
-                changed_here += 1
-
-            if changed_here == 0:
-                continue
-
-            label_path = self._project.label_path_for(img_path)
-            save_annotation(ia, label_path)
-
-            new_snapshot = self._stats_snapshot(ia.annotations)
-            self._update_stats_incremental(old_snapshot, new_snapshot)
-            self._file_list.set_status(img_path, ia.status)
-            self._file_list.set_image_classes(
-                img_path,
-                {item.class_name for item in ia.annotations},
-            )
-
-            changed_images += 1
-            changed_annotations += changed_here
-            self.annotations_changed.emit(img_path)
-
-            if is_current:
-                current_changed = True
-                self._current_annotation = ia
-                self._prev_annotations_snapshot = new_snapshot
-
-        if current_changed:
-            # The canvas stores the same Annotation objects, so repainting and
-            # rebuilding the panel is enough to show the new labels immediately.
-            self._push_undo()
-            self._canvas.update()
-            self._sync_annotations_to_panel()
-
-        return changed_images, changed_annotations
-
     def _on_panel_annotation_class_change(self, ann_id: str) -> None:
-        """Change the selected annotation class on all selected images."""
+        """Change only the annotation selected in the annotation list."""
         if not self._project:
             return
 
@@ -966,33 +889,18 @@ class DetectPoseView(TaskView):
         if ann is None:
             return
 
-        classes = list(self._project.config.classes)
-        if not classes:
-            return
-
         old_class = ann.class_name
-        current_idx = classes.index(old_class) if old_class in classes else 0
-        cls_name, ok = QInputDialog.getItem(
-            self,
-            "修改标注类别",
-            "类别:",
-            classes,
-            current_idx,
-            False,
+        classes = merged_project_annotation_classes(self._project)
+        cls_name = self._show_class_picker_at(
+            old_class,
+            QCursor.pos(),
+            classes=classes,
         )
-        if not ok or not cls_name or cls_name == old_class:
+        if not cls_name or cls_name == old_class:
             return
 
-        changed_images, changed_annotations = self._replace_class_in_selected_images(
-            old_class,
-            cls_name,
-        )
-
-        if changed_annotations > 0:
-            self.status_changed.emit(
-                f"已将 {changed_images} 张已选图片中的 "
-                f"{changed_annotations} 个「{old_class}」修改为「{cls_name}」"
-            )
+        self._apply_annotation_class_change(ann, cls_name)
+        self.status_changed.emit(f"已将当前标注从「{old_class}」修改为「{cls_name}」")
 
     def _on_panel_annotation_confirm(self, ann_id: str, confirmed: bool) -> None:
         ann = next((a for a in self._canvas.annotations if a.id == ann_id), None)

@@ -52,7 +52,8 @@ _BASE_PARAM_GROUPS: list[tuple[str, list[str]]] = [
 ]
 
 _DETECT_AUG_KEYS = ["degrees", "translate", "shear", "perspective",
-                    "mosaic", "mixup", "copy_paste"]
+                    "mosaic", "mixup"]
+_SEGMENT_KEYS = ["mask_ratio", "overlap_mask", "copy_paste", "copy_paste_mode"]
 _CLASSIFY_AUG_KEYS = ["erasing", "auto_augment", "dropout"]
 _POSE_LOSS_KEYS = ["pose", "kobj"]
 
@@ -81,6 +82,10 @@ def _format_train_params(params: dict, task: str) -> str:
         items = [_format_param_value(k, params[k]) for k in _DETECT_AUG_KEYS if k in params]
         if items:
             sections.append(("Detect 增强", items))
+    if task == "segment":
+        items = [_format_param_value(k, params[k]) for k in _SEGMENT_KEYS if k in params]
+        if items:
+            sections.append(("分割参数", items))
     elif task == "classify" and params.get("include_classify_params"):
         items = [_format_param_value(k, params[k]) for k in _CLASSIFY_AUG_KEYS if k in params]
         if items:

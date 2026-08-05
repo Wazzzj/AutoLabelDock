@@ -1,6 +1,13 @@
 """AutoLabel Dock — entry point."""
 
+import os
 import sys
+
+# Ultralytics generates result plots from the background training QThread.
+# GUI Matplotlib backends (notably PyCharm's backend_interagg) are not
+# thread-safe and can corrupt the Windows native heap when training finishes.
+# Agg keeps all saved training plots without creating GUI objects.
+os.environ["MPLBACKEND"] = "Agg"
 
 from PyQt5.QtWidgets import QApplication
 

@@ -258,7 +258,11 @@ class TagController(QObject):
 
     # ── Filter breakdown ──────────────────────────────────────────
 
-    def compute_filter_breakdown(self, filt: TagFilter) -> dict[str, int]:
+    def compute_filter_breakdown(
+        self,
+        filt: TagFilter,
+        data_folder: str | None = None,
+    ) -> dict[str, int]:
         """Aggregate ``filt.classify`` over every image in the open project.
 
         Returns ``{"match": int, "excluded": int, "no_include": int,
@@ -271,14 +275,19 @@ class TagController(QObject):
         if self._project is None:
             return counts
         cache = self._get_tag_cache()
-        for img in self._project.list_images():
+        for img in self._project.list_images(data_folder=data_folder):
             tags = cache.get(str(img), set())
             counts[filt.classify(tags)] += 1
         return counts
 
     def _get_tag_cache(self) -> dict[str, set[str]]:
         if self._tag_cache is None:
-            self._tag_cache = self.load_all_image_tags()
+            result: dict[str, set[str]] = {}
+            if self._project is not None:
+                for img in self._project.list_images(data_folder=""):
+                    ia = load_annotation(self._project.label_path_for(img))
+                    result[str(img)] = set(ia.tags) if ia else set()
+            self._tag_cache = result
         return self._tag_cache
 
     def _invalidate_tag_cache(self, *_args) -> None:

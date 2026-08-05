@@ -77,6 +77,7 @@ class TrainController:
         tag_filter: TagFilter | None = None,
         status_filter: str | None = None,
         class_filter: str | None = None,
+        data_folder: str | None = None,
     ) -> str | None:
         """Validate dataset and prepare for training. Returns data_yaml path or None.
 
@@ -89,7 +90,7 @@ class TrainController:
         confirmed_count = 0
         class_counts: dict[str, int] = {}
 
-        for img_path in project.list_images():
+        for img_path in project.list_images(data_folder=data_folder):
             label_path = project.label_path_for(img_path)
             ia = load_annotation(label_path)
             if ia is None:
@@ -147,6 +148,7 @@ class TrainController:
             tag_filter=tag_filter,
             status_filter=status_filter,
             class_filter=class_filter,
+            data_folder=data_folder,
         )
         if task in {"detect", "segment", "pose"}:
             data = yaml.safe_load(Path(data_yaml).read_text(encoding="utf-8")) or {}

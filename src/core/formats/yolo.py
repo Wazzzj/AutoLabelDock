@@ -1,4 +1,4 @@
-"""YOLO format import/export (detection + pose)."""
+"""YOLO format import/export (detection + segmentation + pose)."""
 from __future__ import annotations
 
 from dataclasses import replace
@@ -138,6 +138,53 @@ def export_yolo_detection(
     _write_yolo_data_yaml(output_dir, class_map.names)
 
 
+def export_yolo_segment(
+    image_annotations: list[ImageAnnotation],
+    output_dir: Path | str,
+    classes: list[str],
+    only_confirmed: bool = False,
+) -> None:
+    """Export annotations to YOLO segmentation format."""
+    output_dir = Path(output_dir)
+    labels_dir = output_dir / "labels"
+    labels_dir.mkdir(parents=True, exist_ok=True)
+    normalized_annotations = _normalize_detection_export_annotations(image_annotations, classes)
+    class_map = resolve_detection_class_map(
+        normalized_annotations,
+        classes,
+        only_confirmed=only_confirmed,
+    )
+
+    for ia in normalized_annotations:
+        lines = []
+        for ann in ia.annotations:
+            if only_confirmed and not ann.confirmed:
+                continue
+            if len(ann.polygon) >= 3:
+                polygon = ann.polygon
+            elif ann.bbox is not None:
+                cx, cy, w, h = ann.bbox
+                x1 = max(0.0, cx - w / 2)
+                y1 = max(0.0, cy - h / 2)
+                x2 = min(1.0, cx + w / 2)
+                y2 = min(1.0, cy + h / 2)
+                polygon = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
+            else:
+                continue
+
+            cid = class_map.id_by_name[ann.class_name]
+            parts = [str(cid)]
+            for x, y in polygon:
+                parts.extend([f"{x:.6f}", f"{y:.6f}"])
+            lines.append(" ".join(parts))
+
+        label_path = _export_label_path(labels_dir, ia.image_path)
+        label_path.parent.mkdir(parents=True, exist_ok=True)
+        label_path.write_text("\n".join(lines) + "\n" if lines else "", encoding="utf-8")
+
+    _write_yolo_data_yaml(output_dir, class_map.names)
+
+
 def import_yolo_detection(
     labels_dir: Path | str,
     classes: list[str] | None = None,
@@ -214,6 +261,38 @@ def export_yolo_pose(
         label_path.write_text("\n".join(lines) + "\n" if lines else "", encoding="utf-8")
 
     _write_yolo_data_yaml(output_dir, class_map.names)
+
+
+def export_yolo(
+    image_annotations: list[ImageAnnotation],
+    output_dir: Path | str,
+    classes: list[str],
+    only_confirmed: bool = False,
+    task_type: str = "detect",
+) -> None:
+    """Export the YOLO representation matching the project task type."""
+    if task_type == "segment":
+        export_yolo_segment(
+            image_annotations,
+            output_dir,
+            classes,
+            only_confirmed=only_confirmed,
+        )
+        return
+    if task_type == "pose":
+        export_yolo_pose(
+            image_annotations,
+            output_dir,
+            classes,
+            only_confirmed=only_confirmed,
+        )
+        return
+    export_yolo_detection(
+        image_annotations,
+        output_dir,
+        classes,
+        only_confirmed=only_confirmed,
+    )
 
 
 def import_yolo_pose(

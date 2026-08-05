@@ -70,9 +70,10 @@ _COMMON_KEYS = (
 )
 _DETECT_KEYS = (
     "degrees", "translate", "shear", "perspective",
-    "mosaic", "mixup", "copy_paste",
+    "mosaic", "mixup",
     "include_detect_params", "single_cls",
 )
+_SEGMENT_KEYS = ("mask_ratio", "overlap_mask", "copy_paste", "copy_paste_mode")
 _CLASSIFY_KEYS = ("erasing", "dropout", "include_classify_params")
 _POSE_KEYS = ("pose", "kobj", "kpt_shape", "include_pose_params")
 
@@ -93,6 +94,8 @@ def extract_task_params(config) -> dict:
     task = config.task
     if task in ("detect", "segment", "pose"):
         keys.extend(_DETECT_KEYS)
+    if task == "segment":
+        keys.extend(_SEGMENT_KEYS)
     if task == "classify":
         keys.extend(_CLASSIFY_KEYS)
     if task == "pose":

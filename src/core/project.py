@@ -365,11 +365,12 @@ class ProjectManager:
 
         Directories are scanned recursively. When a source image has a same-stem
         JSON next to it, the JSON is copied to the mirrored label folder using
-        the same relative path.
+        the same relative path. An existing mirrored label is preserved and
+        does not prevent a missing image from being imported.
 
         Returns:
             (new_paths, skipped_paths). A path is skipped when the destination
-            image or mirrored label JSON already exists.
+            image already exists.
         """
         folder_name = self._normalize_data_folder(folder)
         root = self.image_root()
@@ -413,13 +414,13 @@ class ProjectManager:
                     same_file = src.resolve() == dst.resolve()
                 except OSError:
                     same_file = False
-                if same_file or dst.exists() or (label_src.exists() and label_dst.exists()):
+                if same_file or dst.exists():
                     skipped.append(src)
                     continue
 
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src, dst)
-                if label_src.exists():
+                if label_src.exists() and not label_dst.exists():
                     label_dst.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(label_src, label_dst)
                 imported.append(dst)

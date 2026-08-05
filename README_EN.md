@@ -124,6 +124,7 @@ It turns "annotation" and "training" into a single closed loop: label a batch of
 | YOLO (txt) | ✅ | ✅ | Detection / Pose |
 | COCO (json) | ✅ | ✅ | Detection / Pose |
 | labelme (json) | ✅ | ✅ | Detection / Pose |
+| iSAT (json) | ❌ | ✅ | Detection / Segmentation |
 | ImageFolder | ✅ | ✅ | Classification (folder-per-class) |
 | CSV | ✅ | ❌ | Classification |
 

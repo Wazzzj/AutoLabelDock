@@ -13,6 +13,9 @@ DEFAULT_FREEZE = None
 DEFAULT_WORKERS = 8
 DEFAULT_PATIENCE = 100
 DEFAULT_ERASING = 0.4
+DEFAULT_MASK_RATIO = 4
+DEFAULT_OVERLAP_MASK = True
+DEFAULT_COPY_PASTE_MODE = "flip"
 
 
 @dataclass
@@ -53,10 +56,15 @@ class TrainConfig:
     fliplr: float = 0.5
     mosaic: float = 1.0
     mixup: float = 0.0
-    copy_paste: float = 0.0
     erasing: float = DEFAULT_ERASING
     auto_augment: str = "randaugment"
     dropout: float = 0.0
+
+    # Segmentation-specific
+    mask_ratio: int = DEFAULT_MASK_RATIO
+    overlap_mask: bool = DEFAULT_OVERLAP_MASK
+    copy_paste: float = 0.0
+    copy_paste_mode: str = DEFAULT_COPY_PASTE_MODE
 
     include_detect_params: bool = False
     include_classify_params: bool = False
@@ -72,6 +80,7 @@ class TrainConfig:
     # them before YOLO.train() is called; they are not Ultralytics kwargs.
     dataset_status_filter: str | None = None
     dataset_class_filter: str | None = None
+    dataset_data_folder: str = ""
 
     # Output
     project: str = ""
@@ -121,7 +130,7 @@ class TrainConfig:
         }
         args.update(common_aug_args)
 
-        if self.task in {"detect", "segment", "pose"} or self.include_detect_params:
+        if self.task in {"detect", "segment", "pose"}:
             detect_args = {
                 "degrees": self.degrees,
                 "translate": self.translate,
@@ -129,11 +138,10 @@ class TrainConfig:
                 "perspective": self.perspective,
                 "mosaic": self.mosaic,
                 "mixup": self.mixup,
-                "copy_paste": self.copy_paste,
             }
             args.update(detect_args)
 
-        if self.include_classify_params:
+        if self.task == "classify" and self.include_classify_params:
             classify_args = {
                 "erasing": self.erasing,
                 "auto_augment": self.auto_augment,
@@ -141,7 +149,16 @@ class TrainConfig:
             }
             args.update(classify_args)
 
-        if self.include_pose_params:
+        if self.task == "segment":
+            segment_args = {
+                "mask_ratio": self.mask_ratio,
+                "overlap_mask": self.overlap_mask,
+                "copy_paste": self.copy_paste,
+                "copy_paste_mode": self.copy_paste_mode,
+            }
+            args.update(segment_args)
+
+        if self.task == "pose" and self.include_pose_params:
             pose_args = {
                 "pose": self.pose,
                 "kobj": self.kobj,

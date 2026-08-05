@@ -85,9 +85,15 @@ class ProjectController:
                 task_type=task_type,
                 create_dirs=True,
             )
-            moved_count = self._move_root_images_to_image_dir(pm)
+            moved_count, moved_label_count = self._move_root_images_to_image_dir(pm)
             if moved_count:
                 logger.info("Moved %d root images into %s", moved_count, pm.image_root())
+            if moved_label_count:
+                logger.info(
+                    "Moved %d root label JSONs into %s",
+                    moved_label_count,
+                    pm.config.label_dir,
+                )
             self._project = pm
             self._add_recent(pm)
             return pm
@@ -96,7 +102,7 @@ class ProjectController:
             QMessageBox.warning(self._parent, "错误", f"创建项目失败: {e}")
             return None
 
-    def _move_root_images_to_image_dir(self, project: ProjectManager) -> int:
+    def _move_root_images_to_image_dir(self, project: ProjectManager) -> tuple[int, int]:
         project_dir = project.project_dir
         image_dir = project.image_root()
         image_dir.mkdir(parents=True, exist_ok=True)
@@ -107,6 +113,7 @@ class ProjectController:
             image_dir_resolved = image_dir
 
         moved_count = 0
+        moved_label_count = 0
         for src in sorted(project_dir.iterdir()):
             if not src.is_file() or src.suffix.lower() not in IMAGE_EXTENSIONS:
                 continue
@@ -118,7 +125,16 @@ class ProjectController:
             dst = self._unique_destination(image_dir / src.name)
             shutil.move(str(src), str(dst))
             moved_count += 1
-        return moved_count
+
+            label_src = src.with_suffix(".json")
+            if not label_src.exists():
+                continue
+            label_dst = project.label_path_for(dst)
+            label_dst = self._unique_destination(label_dst)
+            label_dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(label_src), str(label_dst))
+            moved_label_count += 1
+        return moved_count, moved_label_count
 
     @staticmethod
     def _unique_destination(path: Path) -> Path:
@@ -208,6 +224,7 @@ class ProjectController:
                 classes=project.config.classes,
                 only_confirmed=only_confirmed,
                 source_image_dir=project.image_root(),
+                task_type=project.config.task_type,
             )
             version_text = data_version or "全部数据"
             QMessageBox.information(
@@ -251,6 +268,7 @@ class ProjectController:
                 ia,
                 fmt,
                 only_confirmed,
+                project.config.task_type,
             ):
                 continue
 
@@ -267,7 +285,12 @@ class ProjectController:
         return image_count, annotations, source_annotations
 
     @staticmethod
-    def _has_format_exportable_annotations(ia, fmt: str, only_confirmed: bool) -> bool:
+    def _has_format_exportable_annotations(
+        ia,
+        fmt: str,
+        only_confirmed: bool,
+        task_type: str = "detect",
+    ) -> bool:
         if ia is None:
             return False
         if fmt in {"ImageFolder", "CSV"}:
@@ -275,6 +298,12 @@ class ProjectController:
         for ann in ia.annotations:
             if only_confirmed and not ann.confirmed:
                 continue
+            if (
+                fmt == "YOLO"
+                and task_type == "segment"
+                and (len(ann.polygon) >= 3 or ann.bbox is not None)
+            ):
+                return True
             if fmt in {"YOLO", "COCO"} and ann.bbox is not None:
                 return True
             if fmt == "labelme" and (ann.bbox is not None or ann.polygon or ann.keypoints):
@@ -435,6 +464,7 @@ class ProjectController:
         from src.core.formats.yolo import import_yolo_auto
         from src.core.formats.coco import import_coco
         from src.core.formats.labelme import import_labelme
+        from src.core.formats.isat import import_isat
 
         registry = get_import_registry()
         info = registry.get(fmt)
@@ -460,6 +490,8 @@ class ProjectController:
             return import_coco(p, classes=classes or None)
         elif fmt == "labelme":
             return import_labelme(p)
+        elif fmt == "iSAT":
+            return import_isat(p)
         else:
             raise ValueError(f"未实现的导入格式: {fmt}")
 

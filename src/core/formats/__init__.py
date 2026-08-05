@@ -18,6 +18,7 @@ class ExporterInfo:
         needs_classes: bool = True,
         output_is_file: bool = False,
         needs_source_dir: bool = False,
+        needs_task_type: bool = False,
     ):
         self.name = name
         self.label = label
@@ -25,6 +26,7 @@ class ExporterInfo:
         self.needs_classes = needs_classes
         self.output_is_file = output_is_file
         self.needs_source_dir = needs_source_dir
+        self.needs_task_type = needs_task_type
 
 
 class ImporterInfo:
@@ -63,11 +65,13 @@ class ExportRegistry:
         needs_classes: bool = True,
         output_is_file: bool = False,
         needs_source_dir: bool = False,
+        needs_task_type: bool = False,
     ) -> None:
         self._exporters[name] = ExporterInfo(
             name=name, label=label, export_fn=export_fn,
             needs_classes=needs_classes, output_is_file=output_is_file,
             needs_source_dir=needs_source_dir,
+            needs_task_type=needs_task_type,
         )
 
     def get(self, name: str) -> ExporterInfo | None:
@@ -87,6 +91,7 @@ class ExportRegistry:
         classes: list[str] | None = None,
         only_confirmed: bool = False,
         source_image_dir: Path | str | None = None,
+        task_type: str = "detect",
     ) -> None:
         info = self._exporters.get(name)
         if info is None:
@@ -99,6 +104,8 @@ class ExportRegistry:
             kwargs["classes"] = classes
         if info.needs_source_dir:
             kwargs["source_image_dir"] = source_image_dir
+        if info.needs_task_type:
+            kwargs["task_type"] = task_type
         info.export_fn(annotations, output, **kwargs)
 
 
@@ -150,16 +157,23 @@ def get_import_registry() -> ImportRegistry:
 
 def _register_builtin_formats() -> None:
     """Register all built-in export and import formats."""
-    from src.core.formats.yolo import export_yolo_detection, import_yolo_detection
+    from src.core.formats.yolo import export_yolo, import_yolo_detection
     from src.core.formats.coco import export_coco, import_coco
     from src.core.formats.labelme import export_labelme, import_labelme
+    from src.core.formats.isat import import_isat
     from src.core.formats.imagefolder import (
         ImageFolderImporter,
         export_imagefolder,
         export_csv,
     )
 
-    _registry.register("YOLO", "YOLO (txt)", export_yolo_detection, needs_classes=True)
+    _registry.register(
+        "YOLO",
+        "YOLO (txt)",
+        export_yolo,
+        needs_classes=True,
+        needs_task_type=True,
+    )
     _registry.register("COCO", "COCO (json)", export_coco, needs_classes=True, output_is_file=True)
     _registry.register("labelme", "labelme (json)", export_labelme, needs_classes=False)
     _registry.register(
@@ -181,6 +195,10 @@ def _register_builtin_formats() -> None:
     )
     _import_registry.register(
         "labelme", "labelme (json)", import_labelme,
+        input_is_file=False,
+    )
+    _import_registry.register(
+        "iSAT", "iSAT (json)", import_isat,
         input_is_file=False,
     )
     _import_registry.register(

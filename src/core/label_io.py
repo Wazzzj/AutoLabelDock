@@ -47,6 +47,13 @@ def load_annotation(path: Path | str) -> ImageAnnotation | None:
         return None
     except KeyError:
         try:
+            from src.core.formats.isat import import_isat_file
+            ia = import_isat_file(path)
+            if ia is not None:
+                return ia
+        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as e:
+            logger.warning("Failed to load iSAT annotation %s: %s", path, e)
+        try:
             from src.core.formats.labelme import import_labelme_file
             ia = import_labelme_file(path)
             if ia is not None:

@@ -30,7 +30,10 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, pyqtSignal, QEvent
 
 from src.engine.trainer import (
+    DEFAULT_COPY_PASTE_MODE,
     DEFAULT_ERASING,
+    DEFAULT_MASK_RATIO,
+    DEFAULT_OVERLAP_MASK,
     DEFAULT_PATIENCE,
     DEFAULT_WORKERS,
     TRAIN_PRESETS,
@@ -134,6 +137,7 @@ _NUMERIC_FIELD_MAP: dict[str, str] = {
     "mosaic": "_mosaic_spin",
     "mixup": "_mixup_spin",
     "copy_paste": "_copy_paste_spin",
+    "mask_ratio": "_mask_ratio_spin",
     "erasing": "_erasing_spin",
     "dropout": "_dropout_spin",
     "pose": "_pose_weight_spin",
@@ -141,6 +145,7 @@ _NUMERIC_FIELD_MAP: dict[str, str] = {
 }
 
 _BOOL_FIELD_MAP: dict[str, str] = {
+    "overlap_mask": "_overlap_mask_check",
     "include_detect_params": "_include_detect_params_check",
     "include_classify_params": "_include_classify_params_check",
     "include_pose_params": "_include_pose_params_check",
@@ -149,6 +154,7 @@ _BOOL_FIELD_MAP: dict[str, str] = {
 }
 
 _COMBO_FIELD_MAP: dict[str, str] = {
+    "copy_paste_mode": "_copy_paste_mode_combo",
     "optimizer": "_optimizer_combo",
     "device": "_device_combo",
 }
@@ -246,6 +252,7 @@ class TrainPanel(QWidget):
         self._applying_saved_settings = False
         self._last_saved_train_settings: dict | None = None
         self._pending_dataset_class_filter = ""
+        self._pending_dataset_data_folder: str | None = None
         self._init_ui()
         self._connect_signals()
         self._applying_saved_settings = True
@@ -329,6 +336,13 @@ class TrainPanel(QWidget):
 
         # ── Dataset filter (by user-defined tags) ──
         filter_group, filter_form = self._create_param_group("数据筛选", expanded=True)
+        self._data_folder_filter_combo = QComboBox()
+        self._data_folder_filter_combo.addItem("全部版本", "")
+        self._data_folder_filter_combo.setToolTip(
+            "仅使用所选数据版本中的图片构建训练集"
+        )
+        filter_form.addRow("数据版本:", self._data_folder_filter_combo)
+
         self._status_filter_combo = QComboBox()
         self._status_filter_combo.addItems(["全部", "已确认", "待确认", "未标注"])
         self._status_filter_combo.setCurrentText("已确认")
@@ -593,14 +607,47 @@ class TrainPanel(QWidget):
         self._mixup_spin.setValue(0.0)
         detect_mix_form.addRow("MixUp:", self._mixup_spin)
 
+        left_layout.addWidget(self._detect_mix_group)
+
+        # ── Segmentation-specific params ──
+        self._segment_group, segment_form = self._create_param_group("分割专用参数")
+
+        segment_hint = QLabel(
+            "Mask Ratio 是训练时分割掩码的下采样倍数；数值越小掩码分辨率越高，"
+            "但会占用更多显存。Ultralytics 默认值为 4。"
+        )
+        segment_hint.setWordWrap(True)
+        segment_form.addRow("", segment_hint)
+
+        self._mask_ratio_spin = QSpinBox()
+        self._mask_ratio_spin.setRange(1, 64)
+        self._mask_ratio_spin.setSingleStep(1)
+        self._mask_ratio_spin.setValue(DEFAULT_MASK_RATIO)
+        self._mask_ratio_spin.setToolTip("仅用于 segment 训练；1 表示不下采样，默认值为 4")
+        segment_form.addRow("mask_ratio:", self._mask_ratio_spin)
+
+        self._overlap_mask_check = QCheckBox("合并重叠实例掩码")
+        self._overlap_mask_check.setChecked(DEFAULT_OVERLAP_MASK)
+        self._overlap_mask_check.setToolTip(
+            "开启时将重叠的实例掩码合并编码；关闭时分别保留每个实例掩码"
+        )
+        segment_form.addRow("overlap_mask:", self._overlap_mask_check)
+
         self._copy_paste_spin = QDoubleSpinBox()
         self._copy_paste_spin.setRange(0, 1)
-        self._copy_paste_spin.setDecimals(1)
-        self._copy_paste_spin.setSingleStep(0.1)
+        self._copy_paste_spin.setDecimals(2)
+        self._copy_paste_spin.setSingleStep(0.05)
         self._copy_paste_spin.setValue(0.0)
-        detect_mix_form.addRow("Copy-Paste:", self._copy_paste_spin)
+        self._copy_paste_spin.setToolTip("分割对象 Copy-Paste 增强的触发概率")
+        segment_form.addRow("copy_paste:", self._copy_paste_spin)
 
-        left_layout.addWidget(self._detect_mix_group)
+        self._copy_paste_mode_combo = QComboBox()
+        self._copy_paste_mode_combo.addItems(["flip", "mixup"])
+        self._copy_paste_mode_combo.setCurrentText(DEFAULT_COPY_PASTE_MODE)
+        self._copy_paste_mode_combo.setToolTip("Copy-Paste 策略：水平翻转粘贴或 MixUp 粘贴")
+        segment_form.addRow("copy_paste_mode:", self._copy_paste_mode_combo)
+
+        left_layout.addWidget(self._segment_group)
 
         # ── Data augmentation — classify only ──
         self._classify_aug_group, classify_aug_form = self._create_param_group("分类专用参数")
@@ -848,6 +895,7 @@ class TrainPanel(QWidget):
         self._model_size_combo.currentTextChanged.connect(lambda _text: self._on_official_model_changed())
         self._status_filter_combo.currentTextChanged.connect(lambda _text: self._emit_filter_changed())
         self._class_filter_combo.currentTextChanged.connect(lambda _text: self._emit_filter_changed())
+        self._data_folder_filter_combo.currentIndexChanged.connect(lambda _index: self._emit_filter_changed())
         self._tag_filter_bar.filter_changed.connect(lambda _filt: self._emit_filter_changed())
 
     def _emit_filter_changed(self) -> None:
@@ -891,11 +939,14 @@ class TrainPanel(QWidget):
             self._quality_curves.append((curve, keys))
 
     def _update_augmentation_groups_for_task(self, task: str) -> None:
+        uses_detection_augmentations = task in {"detect", "segment", "pose"}
+
         self._common_geo_group.setVisible(True)
-        self._detect_geo_group.setVisible(True)
-        self._detect_mix_group.setVisible(True)
-        self._classify_aug_group.setVisible(True)
-        self._pose_group.setVisible(True)
+        self._detect_geo_group.setVisible(uses_detection_augmentations)
+        self._detect_mix_group.setVisible(uses_detection_augmentations)
+        self._segment_group.setVisible(task == "segment")
+        self._classify_aug_group.setVisible(task == "classify")
+        self._pose_group.setVisible(task == "pose")
 
     def _update_model_combo_for_task(self, task: str) -> None:
         """Refresh the resolved model label after task-specific suffix changes."""
@@ -1144,6 +1195,13 @@ class TrainPanel(QWidget):
                 self._pending_dataset_class_filter = str(value or "")
                 if self._pending_dataset_class_filter:
                     self._set_combo_text(self._class_filter_combo, self._pending_dataset_class_filter)
+            elif key == "dataset_data_folder":
+                self._pending_dataset_data_folder = str(value or "")
+                idx = self._data_folder_filter_combo.findData(
+                    self._pending_dataset_data_folder
+                )
+                if idx >= 0:
+                    self._data_folder_filter_combo.setCurrentIndex(idx)
             elif key == "kpt_shape":
                 if isinstance(value, (list, tuple)) and len(value) == 2:
                     self._kpt_num_spin.setValue(int(value[0]))
@@ -1261,9 +1319,11 @@ class TrainPanel(QWidget):
             "fliplr",
         ]
         current_task = task or self._task_combo.currentText()
-        if current_task in {"detect", "segment", "pose"} or self._include_detect_params_check.isChecked():
-            keys.extend(("degrees", "translate", "shear", "perspective", "mosaic", "mixup", "copy_paste"))
-        if self._include_classify_params_check.isChecked():
+        if current_task in {"detect", "segment", "pose"}:
+            keys.extend(("degrees", "translate", "shear", "perspective", "mosaic", "mixup"))
+        if current_task == "segment":
+            keys.append("copy_paste")
+        if current_task == "classify" and self._include_classify_params_check.isChecked():
             keys.append("erasing")
         return {key: params[key] for key in keys}
 
@@ -1312,6 +1372,9 @@ class TrainPanel(QWidget):
             mosaic=self._mosaic_spin.value(),
             mixup=self._mixup_spin.value(),
             copy_paste=self._copy_paste_spin.value(),
+            mask_ratio=self._mask_ratio_spin.value(),
+            overlap_mask=self._overlap_mask_check.isChecked(),
+            copy_paste_mode=self._copy_paste_mode_combo.currentText(),
             erasing=self._erasing_spin.value(),
             auto_augment=auto_augment,
             dropout=self._dropout_spin.value(),
@@ -1323,6 +1386,7 @@ class TrainPanel(QWidget):
             kobj=self._kobj_spin.value(),
             dataset_status_filter=self.get_status_filter(),
             dataset_class_filter=self.get_class_filter(),
+            dataset_data_folder=self.get_data_folder_filter(),
             resume=self._resume_check.isChecked(),
         )
         if self._task_combo.currentText() == "pose":
@@ -1356,6 +1420,11 @@ class TrainPanel(QWidget):
     def get_class_filter(self) -> str | None:
         text = self._class_filter_combo.currentText()
         return None if text == "所有类别" else text
+
+    def get_data_folder_filter(self) -> str:
+        """Return the selected data-version folder; empty means all versions."""
+        value = self._data_folder_filter_combo.currentData()
+        return str(value) if value else ""
 
     def set_filter_summary(
         self,
@@ -1428,6 +1497,31 @@ class TrainPanel(QWidget):
         self._class_filter_combo.setCurrentIndex(idx if idx >= 0 else 0)
         self._class_filter_combo.blockSignals(False)
         self._pending_dataset_class_filter = ""
+
+    def set_available_data_folders(
+        self,
+        folders: list[str],
+        *,
+        default_folder: str = "",
+        preserve_selection: bool = True,
+    ) -> None:
+        """Refresh the training data-version selector."""
+        current = self.get_data_folder_filter() if preserve_selection else default_folder
+        if self._pending_dataset_data_folder is not None:
+            current = self._pending_dataset_data_folder
+
+        self._data_folder_filter_combo.blockSignals(True)
+        self._data_folder_filter_combo.clear()
+        self._data_folder_filter_combo.addItem("全部版本", "")
+        for folder in folders:
+            if folder:
+                self._data_folder_filter_combo.addItem(folder, folder)
+        idx = self._data_folder_filter_combo.findData(current)
+        if idx < 0:
+            idx = self._data_folder_filter_combo.findData(default_folder)
+        self._data_folder_filter_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self._data_folder_filter_combo.blockSignals(False)
+        self._pending_dataset_data_folder = None
 
     def append_log(self, text: str) -> None:
         """Append text to training log."""

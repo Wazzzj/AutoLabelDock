@@ -3,7 +3,12 @@ import yaml
 from src.controllers.project import ProjectController
 from src.core.annotation import Annotation, ImageAnnotation
 from src.core.config import AppConfig
-from src.core.formats.yolo import export_yolo_detection, import_yolo_auto
+from src.core.formats import get_export_registry
+from src.core.formats.yolo import (
+    export_yolo_detection,
+    export_yolo_segment,
+    import_yolo_auto,
+)
 from src.core.label_io import save_annotation
 from src.core.project import ProjectManager
 
@@ -107,3 +112,101 @@ def test_yolo_confirmed_export_skips_images_without_confirmed_boxes(tmp_path):
     assert (tmp_path / "export" / "images" / "batch_a" / "confirmed.jpg").exists()
     assert not (tmp_path / "export" / "images" / "batch_a" / "pending.jpg").exists()
     assert not (tmp_path / "export" / "images" / "batch_a" / "unlabeled.jpg").exists()
+
+
+def test_yolo_segment_export_writes_polygon_coordinates(tmp_path):
+    export_yolo_segment(
+        [
+            ImageAnnotation(
+                image_path="images/sample.jpg",
+                image_size=(100, 100),
+                annotations=[
+                    Annotation(
+                        class_name="object",
+                        class_id=0,
+                        bbox=(0.45, 0.55, 0.7, 0.7),
+                        polygon=[(0.1, 0.2), (0.8, 0.3), (0.6, 0.9)],
+                        confirmed=True,
+                    )
+                ],
+            )
+        ],
+        tmp_path,
+        classes=["object"],
+    )
+
+    fields = (tmp_path / "labels" / "sample.txt").read_text(encoding="utf-8").split()
+    assert fields == [
+        "0",
+        "0.100000",
+        "0.200000",
+        "0.800000",
+        "0.300000",
+        "0.600000",
+        "0.900000",
+    ]
+
+
+def test_yolo_registry_uses_segment_export_for_segment_project(tmp_path):
+    annotations = [
+        ImageAnnotation(
+            image_path="images/sample.jpg",
+            image_size=(100, 100),
+            annotations=[
+                Annotation(
+                    class_name="object",
+                    class_id=0,
+                    polygon=[(0.1, 0.2), (0.8, 0.3), (0.6, 0.9)],
+                    confirmed=True,
+                )
+            ],
+        )
+    ]
+
+    get_export_registry().export(
+        "YOLO",
+        annotations,
+        tmp_path,
+        classes=["object"],
+        task_type="segment",
+    )
+
+    assert len((tmp_path / "labels" / "sample.txt").read_text(encoding="utf-8").split()) == 7
+
+
+def test_yolo_confirmed_segment_export_keeps_polygon_only_images(tmp_path):
+    project = ProjectManager.create(
+        tmp_path / "project",
+        "project",
+        classes=["object"],
+        task_type="segment",
+    )
+    image_path = project.image_root() / "sample.jpg"
+    image_path.write_bytes(b"fake image bytes")
+    save_annotation(
+        ImageAnnotation(
+            image_path=str(image_path),
+            image_size=(100, 100),
+            annotations=[
+                Annotation(
+                    class_name="object",
+                    class_id=0,
+                    polygon=[(0.1, 0.2), (0.8, 0.3), (0.6, 0.9)],
+                    confirmed=True,
+                )
+            ],
+        ),
+        project.label_path_for(image_path),
+    )
+
+    controller = ProjectController(AppConfig(), tmp_path / "config.json", None)
+    image_count, annotations, _ = controller._prepare_format_export(
+        project,
+        tmp_path / "export",
+        "",
+        fmt="YOLO",
+        only_confirmed=True,
+    )
+
+    assert image_count == 1
+    assert len(annotations) == 1

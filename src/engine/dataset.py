@@ -36,11 +36,12 @@ def count_selected_training_images(
     tag_filter: TagFilter | None = None,
     status_filter: str | None = None,
     class_filter: str | None = None,
+    data_folder: str | None = None,
 ) -> int:
     """Return the number of images that match the training data filters."""
     count = 0
     classes = project.config.classes
-    for img_path in project.list_images():
+    for img_path in project.list_images(data_folder=data_folder):
         ia = load_annotation(project.label_path_for(img_path))
         if ia is None:
             continue
@@ -84,6 +85,7 @@ class DatasetPreparer:
         tag_filter: TagFilter | None = None,
         status_filter: str | None = None,
         class_filter: str | None = None,
+        data_folder: str | None = None,
     ) -> Path:
         """Prepare dataset and return path to data.yaml.
 
@@ -102,7 +104,7 @@ class DatasetPreparer:
 
         # Collect labeled images
         labeled: list[tuple[Path, ImageAnnotation]] = []
-        for img_path in self.pm.list_images():
+        for img_path in self.pm.list_images(data_folder=data_folder):
             label_path = self.pm.label_path_for(img_path)
             ia = load_annotation(label_path)
             if ia is None:

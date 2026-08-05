@@ -589,6 +589,12 @@ class MainWindow(QMainWindow):
             self._preview_panel.refresh()
         elif self._train_panel is not None and current is self._train_panel:
             self._sync_train_config_from_disk()
+            if self._project is not None:
+                self._train_panel.set_available_data_folders(
+                    self._project.list_data_folders(),
+                    default_folder=self._project.config.active_data_folder,
+                )
+                self._refresh_train_filter_summary()
         self._last_tab_widget = current
 
     def _sync_train_config_from_disk(self) -> None:
@@ -673,6 +679,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"AutoLabel Dock — {project_manager.config.name}")
         self._set_project_dir_label(project_manager.project_dir)
         self._maybe_apply_detected_project_data(project_manager)
+        self._add_detected_annotation_classes(project_manager)
         self._welcome.refresh_recent_projects()
 
         self._model_registry = ModelRegistry(project_manager.project_dir / "models")
@@ -769,6 +776,11 @@ class MainWindow(QMainWindow):
             for cls in project_manager.config.classes
         })
         self._train_panel.set_registered_models(self._model_registry.list_models())
+        self._train_panel.set_available_data_folders(
+            project_manager.list_data_folders(),
+            default_folder=project_manager.config.active_data_folder,
+            preserve_selection=False,
+        )
         self._sync_train_available_classes()
         self._refresh_train_filter_summary()
         self._tools_panel.set_working_directory(project_manager.project_dir)
@@ -825,26 +837,15 @@ class MainWindow(QMainWindow):
 
         project_manager.config.image_dir = detected.image_dir
         project_manager.config.label_dir = detected.label_dir
-        self._add_detected_labelme_classes(project_manager)
         project_manager.save()
 
-    def _add_detected_labelme_classes(self, project_manager: ProjectManager) -> None:
-        label_dir = Path(project_manager.config.label_dir)
-        if not label_dir.is_absolute():
-            label_dir = project_manager.project_dir / label_dir
-        try:
-            from src.core.formats.labelme import import_labelme
-            imported = import_labelme(label_dir)
-        except (OSError, ValueError, KeyError, json.JSONDecodeError):
-            logger.warning("Failed to inspect labelme classes in %s", label_dir, exc_info=True)
+    def _add_detected_annotation_classes(self, project_manager: ProjectManager) -> None:
+        """Add classes discovered in internal, labelme, or iSAT sidecar JSON."""
+        discovered = merged_project_annotation_classes(project_manager)
+        if discovered == project_manager.config.classes:
             return
-
-        existing = set(project_manager.config.classes)
-        for ia in imported:
-            for ann in ia.annotations:
-                if ann.class_name and ann.class_name not in existing:
-                    project_manager.config.classes.append(ann.class_name)
-                    existing.add(ann.class_name)
+        project_manager.config.classes = discovered
+        project_manager.save()
 
     def _on_new_project(self) -> None:
         pm = self._project_ctrl.create_project()
@@ -1764,7 +1765,10 @@ class MainWindow(QMainWindow):
         filt = self._train_panel.get_tag_filter()
         tag_counts = None
         if not filt.is_empty():
-            tag_counts = self._tag_ctrl.compute_filter_breakdown(filt)
+            tag_counts = self._tag_ctrl.compute_filter_breakdown(
+                filt,
+                data_folder=self._train_panel.get_data_folder_filter(),
+            )
 
         try:
             selected_count = count_selected_training_images(
@@ -1773,6 +1777,7 @@ class MainWindow(QMainWindow):
                 tag_filter=filt,
                 status_filter=self._train_panel.get_status_filter(),
                 class_filter=self._train_panel.get_class_filter(),
+                data_folder=self._train_panel.get_data_folder_filter(),
             )
         except (OSError, ValueError, KeyError):
             logger.warning("Failed to refresh training filter summary", exc_info=True)
@@ -1788,7 +1793,10 @@ class MainWindow(QMainWindow):
             self._train_panel.set_filter_breakdown(None)
             return
         self._train_panel.set_filter_breakdown(
-            self._tag_ctrl.compute_filter_breakdown(filt)
+            self._tag_ctrl.compute_filter_breakdown(
+                filt,
+                data_folder=self._train_panel.get_data_folder_filter(),
+            )
         )
 
     def _on_start_training(self) -> None:
@@ -1827,6 +1835,7 @@ class MainWindow(QMainWindow):
                 tag_filter=self._train_panel.get_tag_filter(),
                 status_filter=self._train_panel.get_status_filter(),
                 class_filter=self._train_panel.get_class_filter(),
+                data_folder=self._train_panel.get_data_folder_filter(),
             )
             if data_yaml is None:
                 self._train_panel._btn_start.setEnabled(True)
