@@ -134,6 +134,142 @@ AutoLabel Dock 是一个基于 **PyQt5 + Ultralytics YOLO** 的桌面端图像�
 
 ---
 
+## 精细轮廓实例分割参数
+
+下面的配置适合固定相机、单个环状目标、需要提取内外轮廓并进行面积、周长、胶宽等计算的 `segment` 项目。建议使用两阶段微调；第二阶段应选择第一阶段输出的 `best.pt` 作为基础模型。
+
+当前示例数据只有一个 `item` 类别时，可启用 `single_cls`。训练前应保证：
+
+- 只使用已经人工检查并确认的多边形标注。
+- 训练集与验证集不包含同一实物或相邻重复帧。
+- 不让 `train` 和 `val` 指向同一个图片目录。
+- 修正自相交轮廓，并检查胶环内孔是否正确保留。
+- 精细测量数据尽量使用高分辨率原图；提高 `imgsz` 不能恢复原图中不存在的细节。
+
+### 第一阶段：冻结骨干网络
+
+在训练面板中填写以下参数：
+
+```yaml
+task: segment
+model: yolo26m-seg.pt
+epochs: 40
+batch: 4
+imgsz: 1024
+device: "0"
+freeze: 10
+workers: 4
+patience: 15
+val_ratio: 0.25
+
+optimizer: AdamW
+lr0: 0.001
+lrf: 0.01
+momentum: 0.937
+weight_decay: 0.0005
+warmup_epochs: 3.0
+warmup_momentum: 0.8
+warmup_bias_lr: 0.1
+
+hsv_h: 0.0
+hsv_s: 0.1
+hsv_v: 0.2
+degrees: 2.0
+translate: 0.03
+scale: 0.10
+shear: 0.0
+perspective: 0.0
+flipud: 0.5
+fliplr: 0.5
+mosaic: 0.0
+mixup: 0.0
+
+mask_ratio: 2
+overlap_mask: true
+copy_paste: 0.0
+copy_paste_mode: flip
+
+single_cls: true
+resume: false
+```
+
+### 第二阶段：全模型低学习率微调
+
+选择第一阶段生成的 `best.pt`，取消 Freeze 的固定值并勾选“使用默认值”，其余参数按下面设置：
+
+```yaml
+task: segment
+model: path/to/stage1/weights/best.pt
+epochs: 120
+batch: 4
+imgsz: 1024
+device: "0"
+freeze: null
+workers: 4
+patience: 25
+val_ratio: 0.25
+
+optimizer: AdamW
+lr0: 0.0003
+lrf: 0.01
+momentum: 0.937
+weight_decay: 0.0005
+warmup_epochs: 2.0
+warmup_momentum: 0.8
+warmup_bias_lr: 0.1
+
+hsv_h: 0.0
+hsv_s: 0.1
+hsv_v: 0.2
+degrees: 2.0
+translate: 0.03
+scale: 0.10
+shear: 0.0
+perspective: 0.0
+flipud: 0.5
+fliplr: 0.5
+mosaic: 0.0
+mixup: 0.0
+
+mask_ratio: 2
+overlap_mask: true
+copy_paste: 0.0
+copy_paste_mode: flip
+
+single_cls: true
+resume: false
+```
+
+参数说明：
+
+| 参数 | 建议与原因 |
+|:---|:---|
+| `model` | 首选 `yolo26m-seg.pt`；显存不足时改用 `yolo26s-seg.pt`，不建议在极小数据集上直接使用 x 模型。 |
+| `batch` | 以不发生显存溢出为准；`1024` 输入下依次尝试 4、2、1，不要通过降低 `imgsz` 优先解决。 |
+| `mask_ratio` | `2` 比默认值 `4` 保留更细的训练掩膜；显存充足时可单独对比 `1`，不要与其他参数同时改变。 |
+| `mosaic` | 关闭。该任务中目标占据大部分画面，Mosaic 会缩小目标并引入不真实的拼接边缘。 |
+| `mixup` | 关闭。图像混合会制造不存在的半透明边界。 |
+| `copy_paste` | 关闭。固定位置的单个胶环不适合粘贴出额外实例。 |
+| `degrees` / `translate` / `scale` | 只使用轻量几何增强，避免插值和裁切破坏细边缘。 |
+| `flipud` / `fliplr` | 仅当工件方向、光照方向和缺陷位置没有方向含义时使用 `0.5`；否则均设为 `0.0`。 |
+| `overlap_mask` | 单实例图片保持 `true` 即可；它不会解决多边形自相交问题。 |
+| `single_cls` | 项目始终只有一个目标类别时启用；未来增加类别时必须关闭。 |
+
+分类任务专用的 `erasing`、`auto_augment`、`dropout`，以及姿态任务专用的 `pose`、`kobj`、`kpt_shape`，在 `segment` 训练中不会传给 Ultralytics，保持默认值即可。
+
+### 推理与轮廓计算
+
+- 训练和推理使用相同的 `imgsz=1024`。
+- 推理保持 `retina_masks=True`，优先使用 `result.masks.data` 中的二值掩膜。
+- 精密计算轮廓时使用 `cv2.RETR_CCOMP` 保留内孔，使用 `cv2.CHAIN_APPROX_NONE` 保留全部边缘点。
+- 不要直接用经过较强 `approxPolyDP` 简化的多边形计算周长或胶宽。
+- 除常规 mask mAP 外，建议统计 Boundary IoU、HD95、面积误差、周长误差和胶宽误差。
+- 物理尺寸计算还需要相机标定，将像素坐标转换为实际长度单位。
+
+相关参数可参考 [Ultralytics 训练配置](https://docs.ultralytics.com/modes/train)、[实例分割说明](https://docs.ultralytics.com/tasks/segment) 和 [数据增强说明](https://docs.ultralytics.com/guides/yolo-data-augmentation)。
+
+---
+
 ## 快捷键
 
 ### 检测 / 分割 / 姿态
