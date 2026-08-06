@@ -1,4 +1,4 @@
-"""iSAT instance-segmentation JSON format import."""
+"""iSAT instance-segmentation JSON format import/export."""
 from __future__ import annotations
 
 import json
@@ -10,6 +10,126 @@ from src.core.annotation import Annotation, ImageAnnotation
 
 
 _BACKGROUND_CATEGORY = "__background__"
+
+
+def _export_relative_image_path(image_path: str) -> Path:
+    path = Path(image_path)
+    if path.is_absolute():
+        return Path(path.name)
+    parts = path.parts
+    if parts and parts[0].casefold() == "images":
+        return Path(*parts[1:]) if len(parts) > 1 else Path(path.name)
+    return path
+
+
+def _pixel_polygon(
+    annotation: Annotation,
+    width: int,
+    height: int,
+) -> list[tuple[float, float]]:
+    if len(annotation.polygon) >= 3:
+        return [
+            (round(x * width, 6), round(y * height, 6))
+            for x, y in annotation.polygon
+        ]
+    if annotation.bbox is None:
+        return []
+    cx, cy, bbox_width, bbox_height = annotation.bbox
+    x1 = max(0.0, (cx - bbox_width / 2) * width)
+    y1 = max(0.0, (cy - bbox_height / 2) * height)
+    x2 = min(float(width), (cx + bbox_width / 2) * width)
+    y2 = min(float(height), (cy + bbox_height / 2) * height)
+    return [
+        (round(x1, 6), round(y1, 6)),
+        (round(x2, 6), round(y1, 6)),
+        (round(x2, 6), round(y2, 6)),
+        (round(x1, 6), round(y2, 6)),
+    ]
+
+
+def _pixel_bbox(
+    annotation: Annotation,
+    polygon: list[tuple[float, float]],
+    width: int,
+    height: int,
+) -> list[float]:
+    if annotation.bbox is not None:
+        cx, cy, bbox_width, bbox_height = annotation.bbox
+        return [
+            round(max(0.0, (cx - bbox_width / 2) * width), 6),
+            round(max(0.0, (cy - bbox_height / 2) * height), 6),
+            round(min(float(width), (cx + bbox_width / 2) * width), 6),
+            round(min(float(height), (cy + bbox_height / 2) * height), 6),
+        ]
+    xs = [point[0] for point in polygon]
+    ys = [point[1] for point in polygon]
+    return [min(xs), min(ys), max(xs), max(ys)]
+
+
+def _polygon_area(polygon: list[tuple[float, float]]) -> float:
+    area = 0.0
+    for index, (x1, y1) in enumerate(polygon):
+        x2, y2 = polygon[(index + 1) % len(polygon)]
+        area += x1 * y2 - x2 * y1
+    return round(abs(area) / 2.0, 6)
+
+
+def export_isat(
+    image_annotations: list[ImageAnnotation],
+    output_dir: Path | str,
+    only_confirmed: bool = False,
+) -> None:
+    """Export one standard iSAT JSON annotation file per labeled image."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for image_annotation in image_annotations:
+        width, height = image_annotation.image_size
+        if width <= 0 or height <= 0:
+            raise ValueError(
+                f"iSAT 导出需要有效的图像尺寸: {image_annotation.image_path}"
+            )
+
+        relative_image = _export_relative_image_path(image_annotation.image_path)
+        json_path = output_dir / relative_image.with_suffix(".json")
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+
+        objects = []
+        for annotation in image_annotation.annotations:
+            if only_confirmed and not annotation.confirmed:
+                continue
+            polygon = _pixel_polygon(annotation, width, height)
+            if len(polygon) < 3:
+                continue
+            group = len(objects) + 1
+            objects.append({
+                "category": annotation.class_name,
+                "group": group,
+                "segmentation": [[x, y] for x, y in polygon],
+                "area": _polygon_area(polygon),
+                "layer": group,
+                "bbox": _pixel_bbox(annotation, polygon, width, height),
+                "iscrowd": False,
+                "note": "",
+            })
+
+        image_folder = (Path("images") / relative_image.parent).as_posix()
+        data = {
+            "info": {
+                "description": "ISAT",
+                "folder": image_folder,
+                "name": relative_image.name,
+                "width": width,
+                "height": height,
+                "depth": 3,
+                "note": "",
+            },
+            "objects": objects,
+        }
+        json_path.write_text(
+            json.dumps(data, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
 
 
 def is_isat_data(data: object) -> bool:

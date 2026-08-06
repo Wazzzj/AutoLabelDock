@@ -104,9 +104,11 @@ AutoLabel Dock 是一个基于 **PyQt5 + Ultralytics YOLO** 的桌面端图像�
 | YOLO txt | 支持 | 支持 | 检测 / 分割 / 姿态 |
 | COCO json | 支持 | 支持 | 检测 / 分割 / 姿态 |
 | labelme json | 支持 | 支持 | 检测 / 分割 / 姿态 |
-| iSAT json | 不支持 | 支持 | 检测 / 分割 |
+| iSAT json | 支持 | 支持 | 检测 / 分割 |
 | ImageFolder | 支持 | 支持 | 分类 |
 | CSV | 支持 | 不支持 | 分类 |
+
+iSAT 导出会在 `labels/` 下按图片子目录生成同名 JSON，写入标准 `info`、`objects`、像素级 `segmentation`、`bbox`、`area`、`group` 和 `layer` 字段。多边形会保留真实轮廓；只有矩形框的标注会转换为四点多边形，同时支持“仅导出已确认标注”。
 
 ### 数据安全
 

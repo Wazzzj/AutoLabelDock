@@ -306,6 +306,8 @@ class ProjectController:
                 return True
             if fmt in {"YOLO", "COCO"} and ann.bbox is not None:
                 return True
+            if fmt == "iSAT" and (len(ann.polygon) >= 3 or ann.bbox is not None):
+                return True
             if fmt == "labelme" and (ann.bbox is not None or ann.polygon or ann.keypoints):
                 return True
         return False

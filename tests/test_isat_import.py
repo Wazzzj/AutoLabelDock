@@ -3,8 +3,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.core.formats import get_import_registry
-from src.core.formats.isat import import_isat, import_isat_file
+from src.core.annotation import Annotation, ImageAnnotation
+from src.core.formats import get_export_registry, get_import_registry
+from src.core.formats.isat import export_isat, import_isat, import_isat_file
 from src.core.annotation_classes import merged_project_annotation_classes
 from src.core.label_io import load_annotation
 from src.core.project import ProjectManager
@@ -128,6 +129,105 @@ class TestISATImport(unittest.TestCase):
         self.assertIsNotNone(info)
         self.assertEqual(info.label, "iSAT (json)")
         self.assertFalse(info.input_is_file)
+
+    def test_export_isat_preserves_polygon_bbox_and_subdirectory(self):
+        output_dir = self.temp_path / "labels"
+        export_isat(
+            [
+                ImageAnnotation(
+                    image_path="images/batch_a/sample.jpeg",
+                    image_size=(200, 100),
+                    annotations=[
+                        Annotation(
+                            class_name="glue",
+                            class_id=0,
+                            bbox=(0.25, 0.35, 0.305, 0.51),
+                            polygon=[
+                                (0.1, 0.1),
+                                (0.4, 0.1),
+                                (0.4, 0.6),
+                                (0.1, 0.6),
+                            ],
+                        )
+                    ],
+                )
+            ],
+            output_dir,
+        )
+
+        json_path = output_dir / "batch_a" / "sample.json"
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+        self.assertEqual(data["info"], {
+            "description": "ISAT",
+            "folder": "images/batch_a",
+            "name": "sample.jpeg",
+            "width": 200,
+            "height": 100,
+            "depth": 3,
+            "note": "",
+        })
+        self.assertEqual(data["objects"][0]["segmentation"], [
+            [20.0, 10.0],
+            [80.0, 10.0],
+            [80.0, 60.0],
+            [20.0, 60.0],
+        ])
+        self.assertEqual(data["objects"][0]["bbox"], [19.5, 9.5, 80.5, 60.5])
+        self.assertEqual(data["objects"][0]["area"], 3000.0)
+
+        imported = import_isat_file(json_path)
+        self.assertIsNotNone(imported)
+        self.assertEqual(imported.image_size, (200, 100))
+        self.assertEqual(imported.annotations[0].polygon, [
+            (0.1, 0.1),
+            (0.4, 0.1),
+            (0.4, 0.6),
+            (0.1, 0.6),
+        ])
+
+    def test_export_isat_converts_bbox_to_polygon_and_filters_unconfirmed(self):
+        output_dir = self.temp_path / "labels"
+        export_isat(
+            [
+                ImageAnnotation(
+                    image_path="images/sample.jpg",
+                    image_size=(100, 80),
+                    annotations=[
+                        Annotation(
+                            class_name="confirmed",
+                            class_id=0,
+                            bbox=(0.5, 0.5, 0.4, 0.5),
+                            confirmed=True,
+                        ),
+                        Annotation(
+                            class_name="pending",
+                            class_id=1,
+                            bbox=(0.2, 0.2, 0.1, 0.1),
+                            confirmed=False,
+                        ),
+                    ],
+                )
+            ],
+            output_dir,
+            only_confirmed=True,
+        )
+
+        data = json.loads((output_dir / "sample.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(data["objects"]), 1)
+        self.assertEqual(data["objects"][0]["category"], "confirmed")
+        self.assertEqual(data["objects"][0]["segmentation"], [
+            [30.0, 20.0],
+            [70.0, 20.0],
+            [70.0, 60.0],
+            [30.0, 60.0],
+        ])
+
+    def test_isat_exporter_is_registered(self):
+        info = get_export_registry().get("iSAT")
+
+        self.assertIsNotNone(info)
+        self.assertEqual(info.label, "iSAT (json)")
+        self.assertFalse(info.needs_classes)
 
     def test_project_class_discovery_reads_isat_sidecar(self):
         project = ProjectManager.create(

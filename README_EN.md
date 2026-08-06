@@ -124,9 +124,11 @@ It turns "annotation" and "training" into a single closed loop: label a batch of
 | YOLO (txt) | ✅ | ✅ | Detection / Pose |
 | COCO (json) | ✅ | ✅ | Detection / Pose |
 | labelme (json) | ✅ | ✅ | Detection / Pose |
-| iSAT (json) | ❌ | ✅ | Detection / Segmentation |
+| iSAT (json) | ✅ | ✅ | Detection / Segmentation |
 | ImageFolder | ✅ | ✅ | Classification (folder-per-class) |
 | CSV | ✅ | ❌ | Classification |
+
+iSAT export mirrors image subdirectories under `labels/` and writes one same-stem JSON file per image with standard `info`, `objects`, pixel-space `segmentation`, `bbox`, `area`, `group`, and `layer` fields. Polygon contours are preserved; bbox-only annotations are converted to four-point polygons, and confirmed-only export is supported.
 
 ### 🛡️ Data safety
 

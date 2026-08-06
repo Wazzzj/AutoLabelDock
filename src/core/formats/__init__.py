@@ -160,7 +160,7 @@ def _register_builtin_formats() -> None:
     from src.core.formats.yolo import export_yolo, import_yolo_detection
     from src.core.formats.coco import export_coco, import_coco
     from src.core.formats.labelme import export_labelme, import_labelme
-    from src.core.formats.isat import import_isat
+    from src.core.formats.isat import export_isat, import_isat
     from src.core.formats.imagefolder import (
         ImageFolderImporter,
         export_imagefolder,
@@ -176,6 +176,7 @@ def _register_builtin_formats() -> None:
     )
     _registry.register("COCO", "COCO (json)", export_coco, needs_classes=True, output_is_file=True)
     _registry.register("labelme", "labelme (json)", export_labelme, needs_classes=False)
+    _registry.register("iSAT", "iSAT (json)", export_isat, needs_classes=False)
     _registry.register(
         "ImageFolder", "ImageFolder (分类)", export_imagefolder,
         needs_classes=False, needs_source_dir=True,
