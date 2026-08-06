@@ -1,6 +1,0 @@
-
-[locateanything]
-transformers<4.58,>=4.57
-accelerate
-bitsandbytes
-decord

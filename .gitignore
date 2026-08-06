@@ -25,7 +25,14 @@ env/
 # ---- 运行时生成 (ultralytics 训练/数据集) ----
 datasets/
 runs/
+logs/
 *.log
+*.log.*
+
+# ---- 本机应用状态 / 项目使用痕迹 ----
+config/config.json
+config/train_templates.json
+/project.json
 
 # ---- IDE / 编辑器 / 操作系统 ----
 .vscode/
