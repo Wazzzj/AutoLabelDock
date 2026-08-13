@@ -287,7 +287,7 @@ class TrainPanel(QWidget):
         # ── Task config ──
         task_group, task_form = self._create_param_group("任务配置", expanded=True)
         self._task_combo = QComboBox()
-        self._task_combo.addItems(["detect", "segment", "classify", "pose"])
+        self._task_combo.addItems(["detect", "segment", "obb", "classify", "pose"])
         task_form.addRow("任务类型:", self._task_combo)
 
         self._model_name_edit = QLineEdit()
@@ -905,6 +905,13 @@ class TrainPanel(QWidget):
         self._freeze_spin.setEnabled(not use_default)
 
     def _on_task_changed(self, task: str) -> None:
+        yolov5_index = self._model_version_combo.findText("yolov5")
+        if yolov5_index >= 0:
+            item = self._model_version_combo.model().item(yolov5_index)
+            if item is not None:
+                item.setEnabled(task != "obb")
+        if task == "obb" and self._model_version_combo.currentText() == "yolov5":
+            self._model_version_combo.setCurrentText("yolov8")
         self._update_augmentation_groups_for_task(task)
         self._update_model_combo_for_task(task)
         self._rebuild_quality_curves(task)
@@ -939,7 +946,7 @@ class TrainPanel(QWidget):
             self._quality_curves.append((curve, keys))
 
     def _update_augmentation_groups_for_task(self, task: str) -> None:
-        uses_detection_augmentations = task in {"detect", "segment", "pose"}
+        uses_detection_augmentations = task in {"detect", "segment", "pose", "obb"}
 
         self._common_geo_group.setVisible(True)
         self._detect_geo_group.setVisible(uses_detection_augmentations)
@@ -1286,6 +1293,24 @@ class TrainPanel(QWidget):
     def _on_preview_augmentation(self) -> None:
         """Emit augmentation params for preview."""
         params = self.get_effective_augmentation_params()
+        task = self._task_combo.currentText()
+        params["_task"] = task
+        params["_imgsz"] = self._imgsz_spin.value()
+        if task == "segment":
+            params["copy_paste_mode"] = self._copy_paste_mode_combo.currentText()
+        elif task == "classify":
+            # When the optional group is not explicitly passed, these are the
+            # framework defaults and still affect the actual training samples.
+            params["erasing"] = (
+                self._erasing_spin.value()
+                if self._include_classify_params_check.isChecked()
+                else DEFAULT_ERASING
+            )
+            params["auto_augment"] = (
+                self._auto_augment_combo.currentText()
+                if self._include_classify_params_check.isChecked()
+                else "randaugment"
+            )
         self.preview_augmentation_requested.emit(params)
 
     def get_augmentation_params(self) -> dict:
@@ -1319,7 +1344,7 @@ class TrainPanel(QWidget):
             "fliplr",
         ]
         current_task = task or self._task_combo.currentText()
-        if current_task in {"detect", "segment", "pose"}:
+        if current_task in {"detect", "segment", "pose", "obb"}:
             keys.extend(("degrees", "translate", "shear", "perspective", "mosaic", "mixup"))
         if current_task == "segment":
             keys.append("copy_paste")

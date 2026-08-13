@@ -475,11 +475,13 @@ class Predictor:
                 for idx, class_name in enumerate(project_classes)
             }
 
-        boxes = result.boxes
+        obb = getattr(result, "obb", None)
+        is_obb_result = obb is not None and len(obb.cls) > 0
+        boxes = obb if is_obb_result else result.boxes
         if boxes is None or len(boxes.cls) == 0:
             return [], img_size
 
-        has_kpts = result.keypoints is not None
+        has_kpts = getattr(result, "keypoints", None) is not None
 
 
 
@@ -520,10 +522,26 @@ class Predictor:
                 class_name = raw_class_name
                 resolved_id = cls_id
 
-            cx = round(float(boxes.xywhn[i][0].item()), 6)
-            cy = round(float(boxes.xywhn[i][1].item()), 6)
-            bw = round(float(boxes.xywhn[i][2].item()), 6)
-            bh = round(float(boxes.xywhn[i][3].item()), 6)
+            obb_polygon: list[tuple[float, float]] = []
+            if is_obb_result:
+                points = boxes.xyxyxyxyn[i]
+                obb_polygon = [
+                    (round(float(point[0].item()), 6), round(float(point[1].item()), 6))
+                    for point in points
+                ]
+                xs = [point[0] for point in obb_polygon]
+                ys = [point[1] for point in obb_polygon]
+                x1, x2 = min(xs), max(xs)
+                y1, y2 = min(ys), max(ys)
+                cx = round((x1 + x2) / 2, 6)
+                cy = round((y1 + y2) / 2, 6)
+                bw = round(x2 - x1, 6)
+                bh = round(y2 - y1, 6)
+            else:
+                cx = round(float(boxes.xywhn[i][0].item()), 6)
+                cy = round(float(boxes.xywhn[i][1].item()), 6)
+                bw = round(float(boxes.xywhn[i][2].item()), 6)
+                bh = round(float(boxes.xywhn[i][3].item()), 6)
 
             keypoints = []
             if has_kpts and result.keypoints.xyn is not None:
@@ -537,8 +555,8 @@ class Predictor:
                     label = kpt_labels[j] if kpt_labels and j < len(kpt_labels) else f"kp_{j}"
                     keypoints.append(Keypoint(x=kx, y=ky, visible=visible, label=label))
 
-            polygons: list[list[tuple[float, float]]] = []
-            if i < len(mask_arrays):
+            polygons: list[list[tuple[float, float]]] = [obb_polygon] if obb_polygon else []
+            if not polygons and i < len(mask_arrays):
                 polygons = self._mask_to_normalized_polygons(
                     mask_arrays[i],
                     w,

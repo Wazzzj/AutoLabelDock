@@ -13,7 +13,7 @@ TRAIN_TEMPLATE_COMMENTS = {
     "version": "训练模板配置文件版本。",
     "templates": "用户保存的训练模板列表；内置默认模板由代码注入，不写入此文件。",
     "name": "模板名称，会显示在训练页模板下拉框中。",
-    "task": "模板适用任务类型：detect、segment、classify、pose。",
+    "task": "模板适用任务类型：detect、segment、obb、classify、pose。",
     "params": "模板保存的训练参数快照。",
     "created_at": "模板创建时间。",
 }
@@ -24,7 +24,7 @@ class TrainTemplate:
     """A named, task-bound snapshot of training parameters."""
 
     name: str
-    task: str  # "detect" | "segment" | "classify" | "pose"
+    task: str  # "detect" | "segment" | "obb" | "classify" | "pose"
     params: dict
     created_at: str
     builtin: bool = False
@@ -83,7 +83,7 @@ def extract_task_params(config) -> dict:
 
     Returns a dict with:
       - common params (always)
-      - detect/segment/pose aug params (when task in {"detect", "segment", "pose"})
+      - detection-style aug params (for detect/segment/pose/obb)
       - classify-only params (when task == "classify")
       - pose-specific params (when task == "pose")
     Excludes runtime-only fields (data_yaml/project/name/resume) and `task`
@@ -92,7 +92,7 @@ def extract_task_params(config) -> dict:
     snapshot = config.to_storage_dict()
     keys = list(_COMMON_KEYS)
     task = config.task
-    if task in ("detect", "segment", "pose"):
+    if task in ("detect", "segment", "pose", "obb"):
         keys.extend(_DETECT_KEYS)
     if task == "segment":
         keys.extend(_SEGMENT_KEYS)

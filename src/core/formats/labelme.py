@@ -144,6 +144,16 @@ def _shape_to_polygon(shape: dict, w_img: int, h_img: int) -> list[tuple[float, 
     return polygon if len(polygon) >= 3 else []
 
 
+def _is_polygon_shape(shape: dict) -> bool:
+    """Return whether a Labelme-compatible shape carries polygon vertices.
+
+    X-AnyLabeling writes oriented bounding boxes as ``shape_type=rotation``
+    with four pixel-coordinate points.  They have the same geometry needed by
+    the internal OBB representation, so import them like ordinary polygons.
+    """
+    return shape.get("shape_type", "") in {"polygon", "rotation"}
+
+
 def _polygon_to_bbox(polygon: list[tuple[float, float]]) -> tuple[float, float, float, float] | None:
     if not polygon:
         return None
@@ -230,7 +240,7 @@ def import_labelme_file(json_path: Path | str) -> ImageAnnotation | None:
                 if bb is not None:
                     bbox = bb
                     class_name = shape.get("label", "unknown")
-            elif stype == "polygon" and not polygon:
+            elif _is_polygon_shape(shape) and not polygon:
                 poly = _shape_to_polygon(shape, w_img, h_img)
                 if poly:
                     polygon = poly
@@ -268,7 +278,7 @@ def import_labelme_file(json_path: Path | str) -> ImageAnnotation | None:
                 confirmed=True,
                 source="manual",
             ))
-        elif stype == "polygon":
+        elif _is_polygon_shape(shape):
             polygon = _shape_to_polygon(shape, w_img, h_img)
             if not polygon:
                 continue

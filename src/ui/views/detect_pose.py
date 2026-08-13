@@ -75,6 +75,7 @@ class DetectPoseView(TaskView):
         self._prev_annotations_snapshot: list[tuple] | None = None
         self._refreshing_data_tree = False
         self._last_data_tree_item: QTreeWidgetItem | None = None
+        self._obb_tool_active = False
 
         self._init_ui()
         self._connect_signals()
@@ -103,12 +104,22 @@ class DetectPoseView(TaskView):
         self._btn_polygon.setCheckable(True)
         self._btn_polygon.setToolTip("绘制多边形掩膜 (P)")
         set_button_role(self._btn_polygon, "secondary")
+        self._btn_obb = QPushButton(icon("obb"), "旋转框")
+        self._btn_obb.setCheckable(True)
+        self._btn_obb.setToolTip("拖动绘制旋转框，完成后可旋转 (O)")
+        set_button_role(self._btn_obb, "secondary")
         self._btn_keypoint = QPushButton(icon("keypoint"), "关键点")
         self._btn_keypoint.setCheckable(True)
         self._btn_keypoint.setToolTip("绘制关键点 (K)")
         set_button_role(self._btn_keypoint, "secondary")
 
-        for btn in [self._btn_select, self._btn_bbox, self._btn_polygon, self._btn_keypoint]:
+        for btn in [
+            self._btn_select,
+            self._btn_bbox,
+            self._btn_polygon,
+            self._btn_obb,
+            self._btn_keypoint,
+        ]:
             btn.setMinimumWidth(80)
             self._toolbar.addWidget(btn)
 
@@ -253,7 +264,8 @@ class DetectPoseView(TaskView):
         # Tool buttons
         self._btn_select.clicked.connect(lambda: self._set_tool("select"))
         self._btn_bbox.clicked.connect(lambda: self._set_tool("draw_bbox"))
-        self._btn_polygon.clicked.connect(lambda: self._set_tool("draw_polygon"))
+        self._btn_polygon.clicked.connect(lambda: self._activate_polygon_tool(False))
+        self._btn_obb.clicked.connect(lambda: self._activate_polygon_tool(True))
         self._btn_keypoint.clicked.connect(lambda: self._set_tool("draw_keypoint"))
 
         # File list
@@ -282,7 +294,7 @@ class DetectPoseView(TaskView):
         self._canvas.keypoint_attach_requested.connect(self._on_keypoint_attach_requested)
         self._canvas.keypoint_selected.connect(self._ann_panel.select_keypoint)
 
-        self._canvas.tool_mode_requested.connect(self._set_tool)
+        self._canvas.tool_mode_requested.connect(self._on_canvas_tool_mode_requested)
 
         # Properties panel
         self._ann_panel.annotation_clicked.connect(self._canvas.select_annotation)
@@ -313,7 +325,12 @@ class DetectPoseView(TaskView):
         self._canvas.clear()
 
         # Show drawing tools by task_type.
-        self._btn_polygon.setVisible(project.config.task_type == "segment")
+        self._btn_polygon.setVisible(project.config.task_type in {"segment", "obb"})
+        self._btn_obb.setVisible(project.config.task_type == "obb")
+        self._obb_tool_active = False
+        self._canvas.set_polygon_point_limit(None)
+        self._canvas.set_obb_editing_enabled(project.config.task_type == "obb")
+        self._set_tool("select")
         self._btn_keypoint.setVisible(project.config.task_type == "pose")
 
         self._refresh_data_folder_tree()
@@ -651,11 +668,25 @@ class DetectPoseView(TaskView):
 
 
     def _set_tool(self, mode: str) -> None:
+        self._obb_tool_active = mode == "draw_obb"
         self._btn_select.setChecked(mode == "select")
         self._btn_bbox.setChecked(mode == "draw_bbox")
         self._btn_polygon.setChecked(mode == "draw_polygon")
+        self._btn_obb.setChecked(mode == "draw_obb")
         self._btn_keypoint.setChecked(mode == "draw_keypoint")
         self._canvas.set_tool_mode(mode)
+
+    def _activate_polygon_tool(self, oriented_box: bool) -> None:
+        self._canvas.set_polygon_point_limit(None)
+        self._set_tool("draw_obb" if oriented_box else "draw_polygon")
+
+    def _on_canvas_tool_mode_requested(self, mode: str) -> None:
+        if mode == "draw_obb":
+            self._activate_polygon_tool(True)
+        elif mode == "draw_polygon":
+            self._activate_polygon_tool(False)
+        else:
+            self._set_tool(mode)
 
 
 
@@ -815,6 +846,8 @@ class DetectPoseView(TaskView):
         self._set_default_class(cls_name)
         if self._canvas.tool_mode == "draw_bbox":
             self._canvas.create_bbox_from_draw(cls_name, cls_id)
+        elif self._canvas.tool_mode == "draw_obb":
+            self._canvas.create_obb_from_draw(cls_name, cls_id)
         elif self._canvas.tool_mode == "draw_polygon":
             self._canvas.create_polygon_from_draw(cls_name, cls_id)
         elif self._canvas.tool_mode == "draw_keypoint":
@@ -1181,7 +1214,9 @@ class DetectPoseView(TaskView):
         if key == Qt.Key_W:
             self._set_tool("draw_bbox")
         elif key == Qt.Key_P:
-            self._set_tool("draw_polygon")
+            self._activate_polygon_tool(False)
+        elif key == Qt.Key_O and self._btn_obb.isVisible():
+            self._activate_polygon_tool(True)
         elif key == Qt.Key_K:
             self._set_tool("draw_keypoint")
         elif key in (Qt.Key_Return, Qt.Key_Enter) and self._canvas.tool_mode == "draw_polygon":

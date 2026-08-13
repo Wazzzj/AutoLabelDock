@@ -6,6 +6,7 @@ from src.core.config import AppConfig
 from src.core.formats import get_export_registry
 from src.core.formats.yolo import (
     export_yolo_detection,
+    export_yolo_obb,
     export_yolo_segment,
     import_yolo_auto,
 )
@@ -210,3 +211,94 @@ def test_yolo_confirmed_segment_export_keeps_polygon_only_images(tmp_path):
 
     assert image_count == 1
     assert len(annotations) == 1
+
+
+def test_yolo_obb_export_and_import_preserve_four_corners(tmp_path):
+    corners = [(0.1, 0.2), (0.7, 0.1), (0.8, 0.6), (0.2, 0.7)]
+    export_yolo_obb(
+        [
+            ImageAnnotation(
+                image_path="images/sample.jpg",
+                image_size=(100, 100),
+                annotations=[
+                    Annotation(
+                        class_name="label",
+                        class_id=0,
+                        polygon=corners,
+                        confirmed=True,
+                    )
+                ],
+            )
+        ],
+        tmp_path,
+        classes=["label"],
+    )
+
+    fields = (tmp_path / "labels" / "sample.txt").read_text(encoding="utf-8").split()
+    assert len(fields) == 9
+    imported = import_yolo_auto(
+        tmp_path / "labels",
+        classes=["label"],
+        task_type="obb",
+    )
+    assert imported[0].annotations[0].polygon == corners
+    assert tuple(round(value, 6) for value in imported[0].annotations[0].bbox) == (
+        0.45, 0.4, 0.7, 0.6,
+    )
+
+
+def test_yolo_obb_import_reads_indexed_classes_txt(tmp_path):
+    labels = tmp_path / "labels"
+    labels.mkdir()
+    (tmp_path / "classes.txt").write_text("0:label\n1:iron_shell\n", encoding="utf-8")
+    (labels / "sample.txt").write_text(
+        "1 0.1 0.2 0.7 0.1 0.8 0.6 0.2 0.7\n",
+        encoding="utf-8",
+    )
+
+    imported = import_yolo_auto(labels, task_type="obb")
+    assert imported[0].annotations[0].class_name == "iron_shell"
+
+
+def test_yolo_registry_uses_obb_export_for_obb_project(tmp_path):
+    get_export_registry().export(
+        "YOLO",
+        [
+            ImageAnnotation(
+                image_path="sample.jpg",
+                image_size=(100, 100),
+                annotations=[
+                    Annotation(
+                        class_name="object",
+                        class_id=0,
+                        polygon=[(0.1, 0.2), (0.7, 0.1), (0.8, 0.6), (0.2, 0.7)],
+                    )
+                ],
+            )
+        ],
+        tmp_path,
+        classes=["object"],
+        task_type="obb",
+    )
+    assert len((tmp_path / "labels" / "sample.txt").read_text().split()) == 9
+
+
+def test_yolo_confirmed_obb_export_keeps_four_point_images(tmp_path):
+    ia = ImageAnnotation(
+        image_path="sample.jpg",
+        image_size=(100, 100),
+        annotations=[
+            Annotation(
+                class_name="object",
+                class_id=0,
+                polygon=[(0.1, 0.2), (0.7, 0.1), (0.8, 0.6), (0.2, 0.7)],
+                confirmed=True,
+            )
+        ],
+    )
+    assert ProjectController._has_format_exportable_annotations(
+        ia,
+        "YOLO",
+        only_confirmed=True,
+        task_type="obb",
+    )

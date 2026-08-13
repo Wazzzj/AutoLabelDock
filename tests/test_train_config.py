@@ -31,6 +31,22 @@ def test_detect_augmentation_values_are_passed_for_detection_tasks():
     assert args["mixup"] == 0.0
 
 
+def test_obb_uses_detection_augmentations_without_segmentation_params():
+    args = TrainConfig(
+        data_yaml="data.yaml",
+        model="yolov8n-obb.pt",
+        task="obb",
+        degrees=15.0,
+        mosaic=0.5,
+        mask_ratio=2,
+    ).to_train_args()
+
+    assert args["task"] == "obb"
+    assert args["degrees"] == 15.0
+    assert args["mosaic"] == 0.5
+    assert "mask_ratio" not in args
+
+
 def test_segmentation_params_are_passed_only_for_segmentation_tasks():
     segment = TrainConfig(
         data_yaml="data.yaml",

@@ -78,7 +78,7 @@ def _format_train_params(params: dict, task: str) -> str:
         if items:
             sections.append((group_name, items))
 
-    if task in {"detect", "segment"} and params.get("include_detect_params"):
+    if task in {"detect", "segment", "obb"} and params.get("include_detect_params"):
         items = [_format_param_value(k, params[k]) for k in _DETECT_AUG_KEYS if k in params]
         if items:
             sections.append(("Detect 增强", items))

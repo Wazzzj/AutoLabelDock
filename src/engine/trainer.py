@@ -24,7 +24,7 @@ class TrainConfig:
 
     data_yaml: str
     model: str
-    task: str  # "detect", "segment", "classify", "pose"
+    task: str  # "detect", "segment", "classify", "pose", "obb"
 
     # Basic hyperparameters
     epochs: int = 100
@@ -130,7 +130,7 @@ class TrainConfig:
         }
         args.update(common_aug_args)
 
-        if self.task in {"detect", "segment", "pose"}:
+        if self.task in {"detect", "segment", "pose", "obb"}:
             detect_args = {
                 "degrees": self.degrees,
                 "translate": self.translate,

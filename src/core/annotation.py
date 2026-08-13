@@ -89,6 +89,77 @@ class Annotation:
             kp.clamp()
 
 
+def annotation_geometry(
+    annotation: Annotation,
+) -> tuple[float, float, float, float, float] | None:
+    """Return normalized width, height, area and center coordinates.
+
+    Polygon/OBB annotations use their actual polygon area (shoelace formula)
+    and axis-aligned bounds for width, height and center. Plain detection boxes
+    use their normalized bbox directly.
+    """
+    if annotation.polygon:
+        points = annotation.polygon
+        xs = [point[0] for point in points]
+        ys = [point[1] for point in points]
+        width = max(xs) - min(xs)
+        height = max(ys) - min(ys)
+        area = abs(sum(
+            x1 * y2 - x2 * y1
+            for (x1, y1), (x2, y2) in zip(points, points[1:] + points[:1])
+        )) / 2.0
+        return (
+            width,
+            height,
+            area,
+            (min(xs) + max(xs)) / 2,
+            (min(ys) + max(ys)) / 2,
+        )
+    if annotation.bbox is not None:
+        center_x, center_y, width, height = annotation.bbox
+        return width, height, width * height, center_x, center_y
+    return None
+
+
+def annotation_area_text(
+    annotation: Annotation,
+    image_size: tuple[int, int] | None = None,
+    *,
+    include_pixels: bool = True,
+) -> str:
+    """Format an annotation area for canvas/preview labels."""
+    geometry = annotation_geometry(annotation)
+    if geometry is None:
+        return ""
+    normalized_area = geometry[2]
+    text = f"面积 {normalized_area * 100:.2f}%"
+    if include_pixels and image_size is not None:
+        image_width, image_height = image_size
+        if image_width > 0 and image_height > 0:
+            pixel_area = round(normalized_area * image_width * image_height)
+            text += f" ({pixel_area} px²)"
+    return text
+
+
+def annotation_display_label(
+    annotation: Annotation,
+    image_size: tuple[int, int] | None = None,
+    *,
+    include_pixels: bool = True,
+) -> str:
+    """Return the class and area label shared by canvas and preview."""
+    area_text = annotation_area_text(
+        annotation,
+        image_size,
+        include_pixels=include_pixels,
+    )
+    return (
+        f"{annotation.class_name} | {area_text}"
+        if area_text
+        else annotation.class_name
+    )
+
+
 @dataclass
 class ImageAnnotation:
     """All annotations for a single image."""

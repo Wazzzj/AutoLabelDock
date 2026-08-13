@@ -32,19 +32,30 @@ It turns "annotation" and "training" into a single closed loop: label a batch of
 
 ## Features
 
-### 🔍 Three annotation tasks
+### 🔍 Five annotation tasks
 
 - **Object detection (detect)**: bounding-box (bbox) annotation
+- **Instance segmentation (segment)**: editable polygon annotation
+- **Oriented bounding boxes (obb)**: drag-to-create rotated boxes with rotation and rectangle-preserving corner resize
 - **Keypoint pose (pose)**: bbox + skeleton keypoints
 - **Image classification (classify)**: single label per image, with a grid selector and `1`–`9` hotkeys for quick labeling that auto-advances to the next image
 
 ### ✏️ Annotation experience
 
 - Keyboard-centric workflow similar to LabelImg
-- Smooth canvas: bbox drawing, keypoint placement, drag-to-move/resize, scroll-wheel zoom and pan; viewport culling keeps it smooth with large numbers of annotations
+- Smooth canvas: bbox, polygon, four-corner OBB, and keypoint drawing with drag-to-move/resize, scroll-wheel zoom and pan
+- Detection boxes, OBBs, and segmentation polygons show class plus area percentage and pixel area on the annotation canvas and large preview; thumbnails show class plus area percentage. Bboxes use width × height, while OBB and segmentation use true polygon area.
 - Per-image undo stack (depth 50), auto-save on image switch, LRU image cache
 - File list color-coded by status (confirmed / pending / unlabeled), with drag-and-drop image import, combined status + class + tag filtering, and right-click batch operations
 - The project `model_predictions/` folder is excluded from annotation image scans and folder trees, so saved inference outputs are not treated as labeling data
+
+### 🔎 Preview and advanced filters
+
+- Combine annotation status, class, data version, and advanced filters in the preview grid.
+- Advanced filters include image Tags plus min/max ranges for width, height, area, confidence, and center X/Y, with one-click reset.
+- Width, height, and center coordinates are percentages of image dimensions; area is a percentage of image area, so one threshold works across resolutions.
+- Class and all enabled numeric constraints must match the same annotation. Editing a range automatically enables it; unchecked ranges do not participate.
+- Classification projects keep Tag filtering while object geometry filters are disabled.
 - Catppuccin Mocha dark theme
 
 <details>
@@ -55,6 +66,8 @@ It turns "annotation" and "training" into a single closed loop: label a batch of
 | Shortcut | Function |
 |:---|:---|
 | `W` | Box drawing mode |
+| `P` | Polygon drawing mode |
+| `O` | OBB drag drawing mode; use the outside handle to rotate |
 | `K` | Keypoint mode |
 | `V` | Select/move mode |
 
@@ -108,7 +121,11 @@ It turns "annotation" and "training" into a single closed loop: label a batch of
 ### 🔄 Training loop
 
 - One-click dataset preparation: stratified train/val split by primary class, zero-copy via symlinks (with automatic fallback on Windows — see [Platform Notes](#platform-notes))
+- Filter training data by all versions or one selected data version, together with status, class, and Tag constraints
+- YOLO training for detect, segment, obb, pose, and classify projects
+- Training runs in an isolated child process so CUDA, DataLoader, or native-library failures cannot terminate the annotation UI; completed model files are recovered and registered when possible
 - Training presets plus full hyperparameter control; live loss / mAP curves; cancellable mid-run
+- Augmentation previews compare single-image transforms with full training samples, including transformed annotation overlays, Mosaic, MixUp, Copy-Paste, classification policies, and Erasing
 - On completion the model is auto-registered to the model library and auto-loaded, ready for inference immediately
 
 ### 📦 Model management
@@ -121,7 +138,8 @@ It turns "annotation" and "training" into a single closed loop: label a batch of
 
 | Format | Export | Import | Applicable tasks |
 |:---|:---:|:---:|:---|
-| YOLO (txt) | ✅ | ✅ | Detection / Pose |
+| YOLO (txt) | ✅ | ✅ | Detection / Segmentation / OBB / Pose |
+| VOC OBB (xml) | ❌ | ✅ | OBB |
 | COCO (json) | ✅ | ✅ | Detection / Pose |
 | labelme (json) | ✅ | ✅ | Detection / Pose |
 | iSAT (json) | ✅ | ✅ | Detection / Segmentation |
@@ -129,6 +147,14 @@ It turns "annotation" and "training" into a single closed loop: label a batch of
 | CSV | ✅ | ❌ | Classification |
 
 iSAT export mirrors image subdirectories under `labels/` and writes one same-stem JSON file per image with standard `info`, `objects`, pixel-space `segmentation`, `bbox`, `area`, `group`, and `layer` fields. Polygon contours are preserved; bbox-only annotations are converted to four-point polygons, and confirmed-only export is supported.
+
+OBB projects use the normalized Ultralytics format `class_id x1 y1 x2 y2 x3 y3 x4 y4`. Set the project task to `obb` before importing nine-column YOLO labels so they are not mistaken for a small pose layout. VOC OBB import accepts `robndbox` XML with radian angles, and `classes.txt` accepts both one class name per line and indexed entries such as `0:label`.
+
+Labelme / X-AnyLabeling JSON oriented boxes stored as four pixel-coordinate points with `shape_type: "rotation"` are also imported as four-corner OBBs. Images and JSON files must share the same stem and live under the configured `images/` and `labels/` directories.
+
+Press `O` or choose **Oriented box** from the canvas context menu, then hold the left mouse button and drag out a rectangle. Select the box and drag the circular handle outside its top edge to rotate the complete box around its center; dragging a corner resizes it like a regular box while preserving a true rectangle.
+
+When an OBB project is created or reopened, same-stem XML/TXT sidecars in the project root, image directory, or common annotation directories are converted automatically if the internal `labels/*.json` file is still missing. The format matching the most unlabeled images is selected, XML wins ties, and existing internal labels are never overwritten.
 
 ### 🛡️ Data safety
 
@@ -144,7 +170,7 @@ iSAT export mirrors image subdirectories under `labels/` and writes one same-ste
 1. Create project  →  2. Import images  →  3. Annotate  →  4. Confirm  →  5. Train  →  6. Iterate ↻
 ```
 
-1. **Create a project**: pick the task type (detection / pose / classification), specify the project directory (the project will automatically scan and load `images/labels`), or leave it blank and drag images in later
+1. **Create a project**: pick detect, segment, obb, pose, or classify, specify the project directory (the project will automatically scan and load `images/labels`), or leave it blank and drag images in later
 2. **Import images**: drag images onto the file list (you can also add images to the project's `images/` directory later and press `F5` to refresh)
 3. **Annotate**: draw manually; or load a YOLO weight to pre-label automatically; or use the LocateAnything text-labeling backend to describe targets in natural language (see [Optional: LocateAnything Text Labeling](#optional-locateanything-text-labeling))
 4. **Confirm**: review auto-labels image by image — editing confirms them

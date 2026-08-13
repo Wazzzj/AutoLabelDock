@@ -30,6 +30,16 @@ def _resolved_annotation_class_name(annotation, classes: list[str]) -> str:
     return class_name
 
 
+def _is_trainable_annotation(annotation, task: str) -> bool:
+    if task == "segment":
+        return len(annotation.polygon) >= 3 or annotation.bbox is not None
+    if task == "obb":
+        return len(annotation.polygon) == 4 or (
+            annotation.bbox is not None and not annotation.polygon
+        )
+    return annotation.bbox is not None
+
+
 def count_selected_training_images(
     project: ProjectManager,
     task: str = "detect",
@@ -60,7 +70,7 @@ def count_selected_training_images(
             continue
 
         for ann in ia.annotations:
-            if not ann.confirmed or (ann.bbox is None and not ann.polygon):
+            if not ann.confirmed or not _is_trainable_annotation(ann, task):
                 continue
             class_name = _resolved_annotation_class_name(ann, classes)
             if class_filter is None or class_name == class_filter:
@@ -122,11 +132,11 @@ class DatasetPreparer:
                     and (class_filter is None or ia.image_tags[0] == class_filter)
                 ):
                     labeled.append((img_path, ia))
-            # Detection/Segment/Pose: check confirmed annotations
+            # Detection/Segment/Pose/OBB: check confirmed annotations
             else:
                 confirmed = [
                     a for a in ia.annotations
-                    if a.confirmed and (a.bbox is not None or a.polygon)
+                    if a.confirmed and _is_trainable_annotation(a, task)
                 ]
                 if not confirmed:
                     continue
@@ -183,7 +193,7 @@ class DatasetPreparer:
         )
         self._export_detection_pose_or_segment(output_dir, train_set, val_set, class_map, task)
 
-        # Generate data.yaml for detect/segment/pose
+        # Generate data.yaml for detect/segment/pose/obb
         data_yaml_path = output_dir / "data.yaml"
         data = self._build_data_yaml(
             output_dir,
@@ -251,7 +261,7 @@ class DatasetPreparer:
         class_map: ResolvedClassMap,
         task: str,
     ) -> None:
-        """Export to YOLO detect/segment/pose directory structure with symlinks."""
+        """Export to the YOLO label representation for the selected task."""
         for split_name, split_data in [("train", train_set), ("val", val_set)]:
             if not split_data:
                 continue
@@ -268,7 +278,22 @@ class DatasetPreparer:
                 lines = []
                 for ann in ia.annotations:
                     cid = class_map.id_by_name[ann.class_name]
-                    if task == "segment":
+                    if task == "obb":
+                        if len(ann.polygon) == 4:
+                            polygon = ann.polygon
+                        elif ann.bbox is not None and not ann.polygon:
+                            cx, cy, w, h = ann.bbox
+                            x1 = max(0.0, cx - w / 2)
+                            y1 = max(0.0, cy - h / 2)
+                            x2 = min(1.0, cx + w / 2)
+                            y2 = min(1.0, cy + h / 2)
+                            polygon = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
+                        else:
+                            continue
+                        parts = [f"{cid}"]
+                        for x, y in polygon:
+                            parts.extend([f"{x:.6f}", f"{y:.6f}"])
+                    elif task == "segment":
                         if ann.polygon and len(ann.polygon) >= 3:
                             polygon = ann.polygon
                         elif ann.bbox is not None:
@@ -339,7 +364,7 @@ class DatasetPreparer:
         kpt_shape: list[int] | None,
         has_val: bool = True,
     ) -> dict:
-        """Build data.yaml content dict for detect/segment/pose tasks.
+        """Build data.yaml content dict for detect/segment/pose/obb tasks.
 
         Classification does not use data.yaml — ultralytics reads classify datasets
         directly from the directory structure.

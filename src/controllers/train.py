@@ -16,6 +16,7 @@ from src.engine.backends import get_backend
 from src.engine.dataset import DatasetPreparer
 from src.engine.model_manager import ModelRegistry, ModelInfo
 from src.engine.trainer import TrainConfig
+from src.utils.runtime_env import configure_headless_matplotlib
 from src.utils.workers import TrainWorker
 
 logger = logging.getLogger(__name__)
@@ -110,7 +111,7 @@ class TrainController:
                     confirmed_count += 1
                     cls = ia.image_tags[0]
                     class_counts[cls] = class_counts.get(cls, 0) + 1
-            # Detection/Segment/Pose: count confirmed annotations
+            # Detection/Segment/Pose/OBB: count confirmed annotations
             else:
                 for ann in ia.annotations:
                     if ann.confirmed and (class_filter is None or ann.class_name == class_filter):
@@ -150,7 +151,7 @@ class TrainController:
             class_filter=class_filter,
             data_folder=data_folder,
         )
-        if task in {"detect", "segment", "pose"}:
+        if task in {"detect", "segment", "pose", "obb"}:
             data = yaml.safe_load(Path(data_yaml).read_text(encoding="utf-8")) or {}
             self._prepared_classes = list(data.get("names", []))
         else:
@@ -176,6 +177,11 @@ class TrainController:
         """
         if self._worker is not None and self._worker.isRunning():
             raise RuntimeError("已有训练任务在运行中")
+
+        # PyCharm and other IDEs can replace MPLBACKEND after process startup.
+        # Reassert Agg on the GUI thread before the training QThread imports
+        # Ultralytics plotting code.
+        configure_headless_matplotlib()
 
         models_dir = project.project_dir / "models"
         config.project = str(models_dir)

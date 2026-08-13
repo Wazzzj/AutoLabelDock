@@ -12,8 +12,13 @@ def test_main_forces_headless_matplotlib_backend():
     code = (
         "import os; "
         "import main; "
+        "import site; "
         "import matplotlib; "
+        "import src.engine.train_process; "
         "assert os.environ['MPLBACKEND'] == 'Agg'; "
+        "assert os.environ['PYTHONNOUSERSITE'] == '1'; "
+        "assert site.getusersitepackages() not in __import__('sys').path; "
+        "assert 'PyQt5' not in __import__('sys').modules; "
         "assert matplotlib.get_backend().lower() == 'agg'"
     )
 

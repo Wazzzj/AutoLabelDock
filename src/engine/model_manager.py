@@ -19,7 +19,7 @@ class ModelInfo:
 
     name: str
     path: str  # relative to project dir
-    task: str  # "detect", "segment", "classify", "pose"
+    task: str  # "detect", "segment", "obb", "classify", "pose"
     base_model: str
     classes: list[str]
     id: str = field(default_factory=lambda: str(uuid.uuid4()))

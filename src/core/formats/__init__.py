@@ -161,6 +161,7 @@ def _register_builtin_formats() -> None:
     from src.core.formats.coco import export_coco, import_coco
     from src.core.formats.labelme import export_labelme, import_labelme
     from src.core.formats.isat import export_isat, import_isat
+    from src.core.formats.voc_obb import import_voc_obb
     from src.core.formats.imagefolder import (
         ImageFolderImporter,
         export_imagefolder,
@@ -200,6 +201,10 @@ def _register_builtin_formats() -> None:
     )
     _import_registry.register(
         "iSAT", "iSAT (json)", import_isat,
+        input_is_file=False,
+    )
+    _import_registry.register(
+        "VOC-OBB", "VOC OBB (xml)", import_voc_obb,
         input_is_file=False,
     )
     _import_registry.register(

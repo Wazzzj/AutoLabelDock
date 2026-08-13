@@ -1,12 +1,21 @@
-pyinstaller `
+python -m PyInstaller `
   --noconfirm `
   --clean `
-  --windowed `
+  --console `
+  --onedir `
+  --contents-directory . `
   --name AutoLabelDock `
+  --paths "." `
+  --add-data "config/static_resources.json;config" `
+  --add-data "config/train_templates.json;config" `
   --add-data "resources;resources" `
+  --add-data "icon;icon" `
+  --add-data "logoicon;logoicon" `
   --add-data "yolo11n.pt;." `
+  --add-data "yolo11n-cls.pt;." `
+  --add-data "yolo11n-obb.pt;." `
+  --add-data "yolo11n-seg.pt;." `
+  --add-data "yolo11s-seg.pt;." `
   --add-data "yolo26n.pt;." `
-  --collect-all ultralytics `
-  --collect-all PyQt5 `
   --hidden-import pyqtgraph `
   main.py

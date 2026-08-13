@@ -31,7 +31,7 @@ class ProjectConfig:
     auto_label_iou: float = 0.45
     created_at: str = ""
     version: str = "1.0"
-    task_type: str = "detect"  # "detect" | "segment" | "pose" | "classify"
+    task_type: str = "detect"  # "detect" | "segment" | "obb" | "pose" | "classify"
     auto_register_classes: bool = True
     # Project-level registry of known user tags. Per-image tag selections
     # live on ImageAnnotation.tags; this list is just the autocomplete source.
@@ -124,7 +124,7 @@ class ProjectManager:
             image_dir: Either a relative subdir name (created inside project_dir)
                        or an absolute path to an existing image directory.
             classes: Initial class list.
-            task_type: Task type - "detect", "segment", "pose", or "classify".
+            task_type: Task type - "detect", "segment", "obb", "pose", or "classify".
         """
         project_dir = Path(project_dir)
         project_dir.mkdir(parents=True, exist_ok=True)

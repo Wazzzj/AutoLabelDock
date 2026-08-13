@@ -11,6 +11,7 @@ from typing import Literal
 
 from PyQt5.QtWidgets import QWidget, QFileDialog, QMessageBox, QListWidgetItem
 
+from src.core.annotation import ImageAnnotation
 from src.core.config import AppConfig
 from src.core.project import IMAGE_EXTENSIONS, ProjectManager
 from src.core.label_io import load_annotation, save_annotation
@@ -94,6 +95,13 @@ class ProjectController:
                     moved_label_count,
                     pm.config.label_dir,
                 )
+            imported_count, imported_format = self.import_discovered_obb_sidecars(pm)
+            if imported_count:
+                logger.info(
+                    "Auto-imported %d OBB annotations from %s sidecars",
+                    imported_count,
+                    imported_format,
+                )
             self._project = pm
             self._add_recent(pm)
             return pm
@@ -163,10 +171,17 @@ class ProjectController:
         """Open a project from directory. Returns ProjectManager or None."""
         try:
             pm = ProjectManager.open(project_dir)
+            imported_count, imported_format = self.import_discovered_obb_sidecars(pm)
+            if imported_count:
+                logger.info(
+                    "Auto-imported %d OBB annotations from %s sidecars",
+                    imported_count,
+                    imported_format,
+                )
             self._project = pm
             self._add_recent(pm)
             return pm
-        except (FileNotFoundError, json.JSONDecodeError, KeyError, OSError) as e:
+        except (FileNotFoundError, json.JSONDecodeError, KeyError, OSError, ValueError) as e:
             logger.error("Failed to open project: %s", e, exc_info=True)
             QMessageBox.warning(self._parent, "打开失败", f"无法打开项目: {e}")
             return None
@@ -192,6 +207,7 @@ class ProjectController:
         )
         if not dlg.exec_():
             return None
+
         fmt, out_dir, only_confirmed, data_version = dlg.get_values()
         if not out_dir:
             return None
@@ -238,6 +254,109 @@ class ProjectController:
             logger.error("Export failed: %s", e, exc_info=True)
             QMessageBox.warning(self._parent, "导出失败", str(e))
             raise
+
+    @staticmethod
+    def import_discovered_obb_sidecars(project: ProjectManager) -> tuple[int, str]:
+        """Best-effort wrapper so malformed optional sidecars do not block a project."""
+        try:
+            return ProjectController._import_discovered_obb_sidecars(project)
+        except (OSError, ValueError, KeyError) as exc:
+            logger.warning("Failed to auto-import OBB sidecars: %s", exc, exc_info=True)
+            return 0, ""
+
+    @staticmethod
+    def _import_discovered_obb_sidecars(project: ProjectManager) -> tuple[int, str]:
+        """Convert matching project-local OBB sidecars into internal JSON labels.
+
+        Existing internal annotations are never overwritten. When XML and YOLO
+        OBB files coexist, the source matching more currently unlabeled images
+        wins; XML wins ties because it commonly contains richer object metadata.
+        """
+        if project.config.task_type != "obb":
+            return 0, ""
+
+        missing_by_stem = {
+            image_path.stem.casefold(): image_path
+            for image_path in project.list_images()
+            if load_annotation(project.label_path_for(image_path)) is None
+        }
+        if not missing_by_stem:
+            return 0, ""
+
+        source_dirs: list[Path] = []
+        for candidate in (
+            project.project_dir,
+            project.image_root(),
+            project.project_dir / "labels",
+            project.project_dir / "label",
+            project.project_dir / "annotations",
+        ):
+            if candidate.exists() and candidate.is_dir() and candidate not in source_dirs:
+                source_dirs.append(candidate)
+
+        candidates: list[tuple[int, int, str, Path]] = []
+        for source_dir in source_dirs:
+            xml_stems = {path.stem.casefold() for path in source_dir.glob("*.xml")}
+            txt_stems = {
+                path.stem.casefold()
+                for path in source_dir.glob("*.txt")
+                if path.name.casefold() != "classes.txt"
+            }
+            xml_matches = len(xml_stems & missing_by_stem.keys())
+            txt_matches = len(txt_stems & missing_by_stem.keys())
+            if xml_matches:
+                candidates.append((xml_matches, 1, "VOC-OBB", source_dir))
+            if txt_matches:
+                candidates.append((txt_matches, 0, "YOLO", source_dir))
+
+        if not candidates:
+            return 0, ""
+
+        _matches, _xml_priority, fmt, source_dir = max(
+            candidates,
+            key=lambda item: (item[0], item[1]),
+        )
+        if fmt == "VOC-OBB":
+            from src.core.formats.voc_obb import import_voc_obb
+
+            imported = import_voc_obb(source_dir, classes=project.config.classes or None)
+        else:
+            from src.core.formats.yolo import import_yolo_auto
+
+            imported = import_yolo_auto(
+                source_dir,
+                classes=None,
+                task_type="obb",
+            )
+
+        selected: list[tuple[Path, ImageAnnotation]] = []
+        new_classes: list[str] = []
+        known_classes = set(project.config.classes)
+        for image_annotation in imported:
+            image_path = missing_by_stem.get(Path(image_annotation.image_path).stem.casefold())
+            if image_path is None:
+                continue
+            selected.append((image_path, image_annotation))
+            for annotation in image_annotation.annotations:
+                if annotation.class_name and annotation.class_name not in known_classes:
+                    known_classes.add(annotation.class_name)
+                    new_classes.append(annotation.class_name)
+
+        if new_classes:
+            project.config.classes.extend(new_classes)
+            project.save()
+
+        imported_count = 0
+        for image_path, image_annotation in selected:
+            for annotation in image_annotation.annotations:
+                class_id = project.config.get_class_id(annotation.class_name)
+                if class_id >= 0:
+                    annotation.class_id = class_id
+            image_annotation.image_path = image_path.name
+            save_annotation(image_annotation, project.label_path_for(image_path))
+            imported_count += 1
+
+        return imported_count, fmt
 
     def _prepare_format_export(
         self,
@@ -298,13 +417,19 @@ class ProjectController:
         for ann in ia.annotations:
             if only_confirmed and not ann.confirmed:
                 continue
-            if (
-                fmt == "YOLO"
-                and task_type == "segment"
-                and (len(ann.polygon) >= 3 or ann.bbox is not None)
-            ):
-                return True
-            if fmt in {"YOLO", "COCO"} and ann.bbox is not None:
+            if fmt == "YOLO":
+                if task_type == "segment":
+                    if len(ann.polygon) >= 3 or ann.bbox is not None:
+                        return True
+                    continue
+                if task_type == "obb":
+                    if len(ann.polygon) == 4 or (ann.bbox is not None and not ann.polygon):
+                        return True
+                    continue
+                if ann.bbox is not None:
+                    return True
+                continue
+            if fmt == "COCO" and ann.bbox is not None:
                 return True
             if fmt == "iSAT" and (len(ann.polygon) >= 3 or ann.bbox is not None):
                 return True
@@ -362,7 +487,12 @@ class ProjectController:
                             fmt, path, imported_count, skipped_count)
                 return imported_count
 
-            imported = self._invoke_importer(fmt, path, project.config.classes)
+            imported = self._invoke_importer(
+                fmt,
+                path,
+                project.config.classes,
+                task_type=project.config.task_type,
+            )
             if not imported:
                 QMessageBox.information(self._parent, "提示", "未找到可导入的标注")
                 return 0
@@ -460,13 +590,20 @@ class ProjectController:
             QMessageBox.warning(self._parent, "导入失败", str(e))
             return None
 
-    def _invoke_importer(self, fmt: str, path: str, classes: list[str]) -> list:
+    def _invoke_importer(
+        self,
+        fmt: str,
+        path: str,
+        classes: list[str],
+        task_type: str | None = None,
+    ) -> list:
         """Invoke the appropriate importer. Each importer has a different signature."""
         from src.core.formats import get_import_registry
         from src.core.formats.yolo import import_yolo_auto
         from src.core.formats.coco import import_coco
         from src.core.formats.labelme import import_labelme
         from src.core.formats.isat import import_isat
+        from src.core.formats.voc_obb import import_voc_obb
 
         registry = get_import_registry()
         info = registry.get(fmt)
@@ -487,6 +624,7 @@ class ProjectController:
             return import_yolo_auto(
                 p,
                 classes=None if has_external_metadata else (classes or None),
+                task_type=task_type,
             )
         elif fmt == "COCO":
             return import_coco(p, classes=classes or None)
@@ -494,6 +632,8 @@ class ProjectController:
             return import_labelme(p)
         elif fmt == "iSAT":
             return import_isat(p)
+        elif fmt == "VOC-OBB":
+            return import_voc_obb(p, classes=classes or None)
         else:
             raise ValueError(f"未实现的导入格式: {fmt}")
 

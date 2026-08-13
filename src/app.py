@@ -300,10 +300,16 @@ class WelcomePage(QWidget):
     def _read_recent_project_info(self, project_path: str) -> dict[str, str]:
         pm = None
         task_type = "missing"
-        project_name = Path(project_path).name
+        stored_path = Path(project_path)
+        project_dir = (
+            stored_path.parent
+            if stored_path.name.casefold() == "project.json"
+            else stored_path
+        )
+        project_name = project_dir.name
         status = "不可用"
         try:
-            pm = ProjectManager.open(project_path)
+            pm = ProjectManager.open(project_dir)
         except (FileNotFoundError, json.JSONDecodeError, KeyError, OSError):
             pass
         if pm is not None:
@@ -679,6 +685,9 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"AutoLabel Dock — {project_manager.config.name}")
         self._set_project_dir_label(project_manager.project_dir)
         self._maybe_apply_detected_project_data(project_manager)
+        # Also covers projects passed directly after task-type edits, bypassing
+        # ProjectController.open_project(). Existing internal labels are skipped.
+        self._project_ctrl.import_discovered_obb_sidecars(project_manager)
         self._add_detected_annotation_classes(project_manager)
         self._welcome.refresh_recent_projects()
 
@@ -881,7 +890,7 @@ class MainWindow(QMainWindow):
         form.addRow("项目名称:", name_edit)
 
         task_combo = QComboBox()
-        task_combo.addItems(["detect", "segment", "pose", "classify"])
+        task_combo.addItems(["detect", "segment", "obb", "pose", "classify"])
         task_combo.setCurrentText(pm.config.task_type)
         form.addRow("任务类型:", task_combo)
 
@@ -1740,8 +1749,15 @@ class MainWindow(QMainWindow):
                 QMessageBox.information(self, "提示", "没有可用图片")
                 return
             img_path = images[0]
+        images = self._project.list_images()
+        preview_images = [img_path, *(path for path in images if path != img_path)]
         from src.ui.augmentation_preview import AugmentationPreviewDialog
-        dlg = AugmentationPreviewDialog(img_path, params, self)
+        dlg = AugmentationPreviewDialog(
+            preview_images,
+            params,
+            self,
+            project=self._project,
+        )
         dlg.exec_()
 
     def _on_train_tag_filter_changed(self, _filt) -> None:

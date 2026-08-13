@@ -1,15 +1,20 @@
 """Read-only project preview grid with annotation overlays."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from PyQt5.QtCore import Qt, QPointF, QRect, QSize, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QPainter, QPen, QPixmap, QPolygonF
 from PyQt5.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QComboBox,
     QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
+    QFormLayout,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -26,7 +31,11 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from src.core.annotation import ImageAnnotation
+from src.core.annotation import (
+    ImageAnnotation,
+    annotation_display_label,
+    annotation_geometry,
+)
 from src.core.annotation_classes import merged_project_annotation_classes
 from src.core.label_io import load_annotation
 from src.core.project import ProjectManager
@@ -52,6 +61,107 @@ class PreviewSummary:
     text: str
     status: str
     color: str
+
+
+@dataclass(frozen=True)
+class NumericRange:
+    """Optional inclusive numeric range used by preview filters."""
+
+    minimum: float | None = None
+    maximum: float | None = None
+
+    def is_active(self) -> bool:
+        return self.minimum is not None or self.maximum is not None
+
+    def contains(self, value: float) -> bool:
+        if self.minimum is not None and value < self.minimum:
+            return False
+        if self.maximum is not None and value > self.maximum:
+            return False
+        return True
+
+
+@dataclass(frozen=True)
+class PreviewAdvancedFilter:
+    """Image Tag and same-annotation numeric constraints for preview."""
+
+    tag_filter: TagFilter = field(default_factory=TagFilter)
+    width: NumericRange = field(default_factory=NumericRange)
+    height: NumericRange = field(default_factory=NumericRange)
+    area: NumericRange = field(default_factory=NumericRange)
+    confidence: NumericRange = field(default_factory=NumericRange)
+    center_x: NumericRange = field(default_factory=NumericRange)
+    center_y: NumericRange = field(default_factory=NumericRange)
+
+    def annotation_ranges(self) -> tuple[NumericRange, ...]:
+        return (
+            self.width,
+            self.height,
+            self.area,
+            self.confidence,
+            self.center_x,
+            self.center_y,
+        )
+
+    def has_annotation_constraints(self) -> bool:
+        return any(value.is_active() for value in self.annotation_ranges())
+
+    def active_count(self) -> int:
+        return int(not self.tag_filter.is_empty()) + sum(
+            value.is_active() for value in self.annotation_ranges()
+        )
+
+
+def _annotation_matches_advanced_filter(
+    annotation,
+    advanced_filter: PreviewAdvancedFilter,
+) -> bool:
+    if (
+        advanced_filter.confidence.is_active()
+        and not advanced_filter.confidence.contains(annotation.confidence)
+    ):
+        return False
+
+    geometry_ranges = (
+        advanced_filter.width,
+        advanced_filter.height,
+        advanced_filter.area,
+        advanced_filter.center_x,
+        advanced_filter.center_y,
+    )
+    if not any(value.is_active() for value in geometry_ranges):
+        return True
+    geometry = annotation_geometry(annotation)
+    if geometry is None:
+        return False
+    return all(
+        not numeric_range.is_active() or numeric_range.contains(value)
+        for numeric_range, value in zip(geometry_ranges, geometry)
+    )
+
+
+def _image_matches_annotation_filters(
+    annotation: ImageAnnotation,
+    class_filter: str | None,
+    advanced_filter: PreviewAdvancedFilter,
+) -> bool:
+    """Match class/ranges against one object instead of mixing objects."""
+    image_class_match = bool(
+        class_filter is not None and class_filter in annotation.image_tags
+    )
+    candidates = [
+        item
+        for item in annotation.annotations
+        if class_filter is None or item.class_name == class_filter
+    ]
+    if advanced_filter.has_annotation_constraints():
+        return any(
+            _annotation_matches_advanced_filter(item, advanced_filter)
+            for item in candidates
+        )
+    if class_filter is not None:
+        return image_class_match or bool(candidates)
+    return True
 
 
 def _summary_for_annotation(
@@ -106,11 +216,16 @@ def _draw_annotation_overlays(
     point_radius = max(3, int(4 * stroke_scale))
     for ann in annotation.annotations:
         color = QColor(class_colors.get(ann.class_name, PALETTE["primary"]))
+        label_anchor: tuple[float, float] | None = None
         if ann.polygon:
             polygon = QPolygonF([
                 _norm_point(image_rect, x, y)
                 for x, y in ann.polygon
             ])
+            label_anchor = (
+                min(point.x() for point in polygon),
+                min(point.y() for point in polygon),
+            )
             fill = QColor(color)
             fill.setAlpha(46)
             pen = QPen(color, line_width)
@@ -131,6 +246,7 @@ def _draw_annotation_overlays(
             painter.setPen(pen)
             painter.setBrush(Qt.NoBrush)
             painter.drawRect(QRect(int(x1), int(y1), int(x2 - x1), int(y2 - y1)))
+            label_anchor = (x1, y1)
 
         for kp in ann.keypoints:
             x, y = _norm_xy(image_rect, kp.x, kp.y)
@@ -142,6 +258,72 @@ def _draw_annotation_overlays(
                 point_radius * 2,
                 point_radius * 2,
             )
+
+        if label_anchor is None and ann.keypoints:
+            label_anchor = _norm_xy(
+                image_rect,
+                ann.keypoints[0].x,
+                ann.keypoints[0].y,
+            )
+        if label_anchor is not None:
+            _draw_annotation_label(
+                painter,
+                image_rect,
+                label_anchor,
+                annotation_display_label(
+                    ann,
+                    annotation.image_size,
+                    include_pixels=image_rect.width() >= 400,
+                ),
+                color,
+                stroke_scale,
+            )
+
+
+def _draw_annotation_label(
+    painter: QPainter,
+    image_rect: QRect,
+    anchor: tuple[float, float],
+    text: str,
+    color: QColor,
+    stroke_scale: float,
+) -> None:
+    """Draw a readable class/area badge next to a preview annotation."""
+    if not text:
+        return
+    font = QFont()
+    font.setPixelSize(max(9, min(16, round(10 * stroke_scale ** 0.25))))
+    font.setBold(True)
+    painter.setFont(font)
+    metrics = painter.fontMetrics()
+    padding_x = 5
+    padding_y = 2
+    max_text_width = max(1, image_rect.width() - padding_x * 2)
+    display_text = metrics.elidedText(text, Qt.ElideRight, max_text_width)
+    label_width = min(
+        image_rect.width(),
+        metrics.horizontalAdvance(display_text) + padding_x * 2,
+    )
+    label_height = metrics.height() + padding_y * 2
+    anchor_x, anchor_y = anchor
+    label_x = max(
+        image_rect.left(),
+        min(int(anchor_x), image_rect.right() - label_width + 1),
+    )
+    label_y = int(anchor_y) - label_height
+    if label_y < image_rect.top():
+        label_y = int(anchor_y)
+    label_y = min(label_y, image_rect.bottom() - label_height + 1)
+    label_rect = QRect(label_x, label_y, label_width, label_height)
+    background = QColor(color)
+    background.setAlpha(225)
+    painter.fillRect(label_rect, background)
+    painter.setPen(QColor(PALETTE["ink"]))
+    painter.drawText(
+        label_rect.adjusted(padding_x, 0, -padding_x, 0),
+        Qt.AlignLeft | Qt.AlignVCenter,
+        display_text,
+    )
 
 
 class PreviewGrid(QListWidget):
@@ -507,6 +689,153 @@ class PreviewDetailDialog(QDialog):
         self.edit_requested.emit(path)
 
 
+class PreviewAdvancedFilterDialog(QDialog):
+    """Edit preview filters locally and commit them only on Apply."""
+
+    _RANGE_ROWS = (
+        ("width", "宽度", "%", 0.0, 100.0, 1),
+        ("height", "高度", "%", 0.0, 100.0, 1),
+        ("area", "面积", "%", 0.0, 100.0, 2),
+        ("confidence", "置信度", "", 0.0, 1.0, 2),
+        ("center_x", "中心点 X", "%", 0.0, 100.0, 1),
+        ("center_y", "中心点 Y", "%", 0.0, 100.0, 1),
+    )
+
+    def __init__(
+        self,
+        current: PreviewAdvancedFilter,
+        available_tags: list[str],
+        annotation_filters_enabled: bool = True,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.setWindowTitle("高级筛选")
+        self.setMinimumWidth(480)
+        self._current = current
+        self._range_controls: dict[
+            str, tuple[QCheckBox, QDoubleSpinBox, QDoubleSpinBox]
+        ] = {}
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+
+        tag_group = QGroupBox("Tag")
+        tag_layout = QVBoxLayout(tag_group)
+        self._tag_filter_bar = TagFilterBar()
+        self._tag_filter_bar.set_available_tags(available_tags)
+        self._tag_filter_bar.set_filter(current.tag_filter)
+        tag_layout.addWidget(self._tag_filter_bar)
+        layout.addWidget(tag_group)
+
+        annotation_group = QGroupBox("标注属性")
+        annotation_layout = QFormLayout(annotation_group)
+        annotation_layout.setHorizontalSpacing(16)
+        annotation_layout.setVerticalSpacing(8)
+        for key, label, suffix, lower, upper, decimals in self._RANGE_ROWS:
+            enabled = QCheckBox(label)
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(8)
+            minimum = self._make_spin(lower, upper, decimals, suffix)
+            maximum = self._make_spin(lower, upper, decimals, suffix)
+            minimum.setValue(lower)
+            maximum.setValue(upper)
+            minimum.valueChanged.connect(maximum.setMinimum)
+            maximum.valueChanged.connect(minimum.setMaximum)
+            row_layout.addWidget(QLabel("最小"))
+            row_layout.addWidget(minimum)
+            row_layout.addWidget(QLabel("～ 最大"))
+            row_layout.addWidget(maximum)
+            annotation_layout.addRow(enabled, row)
+            self._range_controls[key] = (enabled, minimum, maximum)
+            self._restore_range(key, getattr(current, key))
+            # Keep range fields editable even when the condition is inactive.
+            # Editing either endpoint is itself an intent to enable the row;
+            # unchecking only controls whether the range participates.
+            minimum.valueChanged.connect(
+                lambda _value, checkbox=enabled: checkbox.setChecked(True)
+            )
+            maximum.valueChanged.connect(
+                lambda _value, checkbox=enabled: checkbox.setChecked(True)
+            )
+
+        annotation_group.setEnabled(annotation_filters_enabled)
+        if not annotation_filters_enabled:
+            annotation_group.setToolTip("分类任务没有目标框，不能按标注属性筛选")
+        layout.addWidget(annotation_group)
+
+        hint = QLabel(
+            "宽度、高度和中心位置按图片尺寸百分比计算；面积按图片面积百分比计算。\n"
+            "一张图片中必须存在同一个标注，同时满足已启用的全部属性条件。"
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet(f"color: {PALETTE['text_subtle']};")
+        layout.addWidget(hint)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Reset | QDialogButtonBox.Apply | QDialogButtonBox.Cancel
+        )
+        buttons.button(QDialogButtonBox.Reset).setText("重置全部条件")
+        buttons.button(QDialogButtonBox.Apply).setText("应用")
+        buttons.button(QDialogButtonBox.Cancel).setText("取消")
+        buttons.button(QDialogButtonBox.Reset).clicked.connect(self._reset_all)
+        buttons.button(QDialogButtonBox.Apply).clicked.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    @staticmethod
+    def _make_spin(
+        lower: float,
+        upper: float,
+        decimals: int,
+        suffix: str,
+    ) -> QDoubleSpinBox:
+        spin = QDoubleSpinBox()
+        spin.setRange(lower, upper)
+        spin.setDecimals(decimals)
+        spin.setSingleStep(0.05 if upper == 1.0 else 1.0)
+        if suffix:
+            spin.setSuffix(suffix)
+        spin.setMinimumWidth(110)
+        return spin
+
+    def _restore_range(self, key: str, value: NumericRange) -> None:
+        enabled, minimum, maximum = self._range_controls[key]
+        ui_scale = 1.0 if key == "confidence" else 100.0
+        lower = minimum.minimum()
+        upper = maximum.maximum()
+        minimum.setValue(
+            lower if value.minimum is None else value.minimum * ui_scale
+        )
+        maximum.setValue(
+            upper if value.maximum is None else value.maximum * ui_scale
+        )
+        enabled.setChecked(value.is_active())
+
+    def _reset_all(self) -> None:
+        self._tag_filter_bar.clear()
+        for key, (enabled, minimum, maximum) in self._range_controls.items():
+            minimum.setValue(0.0)
+            maximum.setValue(1.0 if key == "confidence" else 100.0)
+            # Value edits normally auto-enable a condition. Reset values first,
+            # then explicitly leave every condition inactive.
+            enabled.setChecked(False)
+
+    def value(self) -> PreviewAdvancedFilter:
+        values = {"tag_filter": self._tag_filter_bar.current_filter()}
+        for key, (enabled, minimum, maximum) in self._range_controls.items():
+            if not enabled.isChecked():
+                values[key] = NumericRange()
+                continue
+            ui_scale = 1.0 if key == "confidence" else 100.0
+            values[key] = NumericRange(
+                minimum=minimum.value() / ui_scale,
+                maximum=maximum.value() / ui_scale,
+            )
+        return PreviewAdvancedFilter(**values)
+
+
 class PreviewPanel(QWidget):
     """Preview all project images with saved labels overlaid."""
 
@@ -520,7 +849,8 @@ class PreviewPanel(QWidget):
         self._status_filter: str | None = None
         self._class_filter: str | None = None
         self._data_folder_filter: str | None = None
-        self._tag_filter: TagFilter = TagFilter()
+        self._advanced_filter = PreviewAdvancedFilter()
+        self._available_tags: list[str] = []
         self._loader: ThumbnailLoader | None = None
         self._init_ui()
         self._create_loader()
@@ -562,9 +892,13 @@ class PreviewPanel(QWidget):
         self._toolbar.addWidget(QLabel(" 数据版本 "))
         self._toolbar.addWidget(self._data_folder_combo)
 
-        self._tag_filter_bar = TagFilterBar()
-        self._tag_filter_bar.filter_changed.connect(self._on_tag_filter_changed)
-        self._toolbar.addWidget(self._tag_filter_bar)
+        self._advanced_filter_btn = QPushButton("高级筛选")
+        self._advanced_filter_btn.setToolTip(
+            "按 Tag、标注宽高面积、置信度和中心点位置筛选"
+        )
+        set_button_role(self._advanced_filter_btn, "secondary")
+        self._advanced_filter_btn.clicked.connect(self._show_advanced_filters)
+        self._toolbar.addWidget(self._advanced_filter_btn)
 
         self._toolbar.addSeparator()
         self._toolbar.addWidget(QLabel("缩略图 "))
@@ -600,6 +934,8 @@ class PreviewPanel(QWidget):
 
     def set_project(self, project: ProjectManager) -> None:
         self._project = project
+        self._advanced_filter = PreviewAdvancedFilter()
+        self._update_advanced_filter_button()
         self._class_colors = {
             cls: project.config.get_class_color(cls)
             for cls in project.config.classes
@@ -613,7 +949,20 @@ class PreviewPanel(QWidget):
         self.refresh()
 
     def set_available_tags(self, tags: list[str]) -> None:
-        self._tag_filter_bar.set_available_tags(tags)
+        self._available_tags = sorted(set(tags))
+        available = set(self._available_tags)
+        tag_filter = self._advanced_filter.tag_filter
+        cleaned = TagFilter(
+            includes=tuple(tag for tag in tag_filter.includes if tag in available),
+            excludes=tuple(tag for tag in tag_filter.excludes if tag in available),
+            mode=tag_filter.mode,
+        )
+        if cleaned != tag_filter:
+            self._advanced_filter = replace(
+                self._advanced_filter,
+                tag_filter=cleaned,
+            )
+            self._update_advanced_filter_button()
 
     def refresh(self) -> None:
         if self._project is None:
@@ -641,7 +990,7 @@ class PreviewPanel(QWidget):
 
         visible = self._grid.count()
         text = (
-            f"全部 {len(images)} 张 | "
+            f"显示 {visible} / 全部 {len(images)} 张 | "
             f"已确认 {counts['confirmed']} | "
             f"待确认 {counts['pending']} | "
             f"未标注 {counts['unlabeled']}"
@@ -710,9 +1059,25 @@ class PreviewPanel(QWidget):
         self._data_folder_filter = str(current_data) if current_data else None
         self.refresh()
 
-    def _on_tag_filter_changed(self, tag_filter) -> None:
-        self._tag_filter = tag_filter if tag_filter is not None else TagFilter()
+    def _show_advanced_filters(self) -> None:
+        task_type = self._project.config.task_type if self._project is not None else "detect"
+        dialog = PreviewAdvancedFilterDialog(
+            self._advanced_filter,
+            self._available_tags,
+            annotation_filters_enabled=task_type != "classify",
+            parent=self,
+        )
+        if dialog.exec_() != QDialog.Accepted:
+            return
+        self._advanced_filter = dialog.value()
+        self._update_advanced_filter_button()
         self.refresh()
+
+    def _update_advanced_filter_button(self) -> None:
+        count = self._advanced_filter.active_count()
+        self._advanced_filter_btn.setText(
+            f"高级筛选 ({count})" if count else "高级筛选"
+        )
 
     def _passes_filters(
         self,
@@ -721,16 +1086,14 @@ class PreviewPanel(QWidget):
     ) -> bool:
         if self._status_filter is not None and summary.status != self._status_filter:
             return False
-        if self._class_filter is not None:
-            classes = set(annotation.image_tags)
-            classes.update(
-                ann.class_name
-                for ann in annotation.annotations
-                if ann.class_name
-            )
-            if self._class_filter not in classes:
-                return False
-        if not self._tag_filter.is_empty() and not self._tag_filter.matches(annotation.tags):
+        tag_filter = self._advanced_filter.tag_filter
+        if not tag_filter.is_empty() and not tag_filter.matches(annotation.tags):
+            return False
+        if not _image_matches_annotation_filters(
+            annotation,
+            self._class_filter,
+            self._advanced_filter,
+        ):
             return False
         return True
 

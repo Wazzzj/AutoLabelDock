@@ -101,6 +101,45 @@ def test_count_selected_training_images_counts_images_not_annotations(tmp_path):
     ) == 1
 
 
+def test_obb_dataset_exports_four_normalized_corners(tmp_path):
+    project = ProjectManager.create(
+        tmp_path / "project",
+        "project",
+        classes=["label"],
+        task_type="obb",
+    )
+    image_path = project.image_root() / "sample.jpg"
+    image_path.write_bytes(b"fake image bytes")
+    corners = [(0.1, 0.2), (0.7, 0.1), (0.8, 0.6), (0.2, 0.7)]
+    save_annotation(
+        ImageAnnotation(
+            image_path=str(image_path),
+            image_size=(100, 100),
+            annotations=[
+                Annotation(
+                    class_name="label",
+                    class_id=0,
+                    polygon=corners,
+                    confirmed=True,
+                )
+            ],
+        ),
+        project.label_path_for(image_path),
+    )
+
+    data_yaml = DatasetPreparer(project).prepare(
+        tmp_path / "dataset",
+        task="obb",
+        val_ratio=0,
+    )
+    fields = (tmp_path / "dataset" / "train" / "labels" / "sample.txt").read_text().split()
+    assert fields == [
+        "0", "0.100000", "0.200000", "0.700000", "0.100000",
+        "0.800000", "0.600000", "0.200000", "0.700000",
+    ]
+    assert yaml.safe_load(data_yaml.read_text(encoding="utf-8"))["names"] == ["label"]
+
+
 def test_count_selected_training_images_classify_uses_confirmed_image_tags(tmp_path):
     project = ProjectManager.create(
         tmp_path / "project",

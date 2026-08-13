@@ -245,7 +245,7 @@ class ModelController:
         name, ok = QInputDialog.getText(self._parent, "模型名称", "请输入模型名称:")
         if not ok or not name.strip():
             return None
-        tasks = ["detect", "segment", "classify", "pose"]
+        tasks = ["detect", "segment", "obb", "classify", "pose"]
         current_task = self._project.config.task_type if self._project else "detect"
         default_idx = tasks.index(current_task) if current_task in tasks else 0
         task, ok = QInputDialog.getItem(
@@ -645,7 +645,7 @@ class ModelController:
         imgsz: int | None = None,
         device: str | None = None,
     ) -> SinglePredictWorker | None:
-        """Build a background worker for single-image detection/pose inference.
+        """Build a background worker for single-image detection/pose/OBB inference.
 
         Used for slow backends (e.g. LocateAnything) so ``predict`` does not
         block the Qt/X event loop. Returns ``None`` (and warns the user) when no

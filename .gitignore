@@ -33,6 +33,14 @@ logs/
 config/config.json
 config/train_templates.json
 /project.json
+/images/
+/labels/
+/models/
+/.backups/
+
+# ---- 本机构建 / Codex 临时文件 ----
+*.spec
+/.codex-*
 
 # ---- IDE / 编辑器 / 操作系统 ----
 .vscode/

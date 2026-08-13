@@ -30,6 +30,15 @@ _SVGS: dict[str, str] = {
         '<circle cx="7" cy="17" r="1.5" fill="{color}"/>'
         '<circle cx="3" cy="10" r="1.5" fill="{color}"/></svg>'
     ),
+    "obb": (
+        '<svg viewBox="0 0 24 24" fill="none" stroke="{color}" stroke-width="2"'
+        ' stroke-linecap="round" stroke-linejoin="round">'
+        '<polygon points="7 3 21 8 17 21 3 16"/>'
+        '<circle cx="7" cy="3" r="1.5" fill="{color}"/>'
+        '<circle cx="21" cy="8" r="1.5" fill="{color}"/>'
+        '<circle cx="17" cy="21" r="1.5" fill="{color}"/>'
+        '<circle cx="3" cy="16" r="1.5" fill="{color}"/></svg>'
+    ),
     "keypoint": (
         '<svg viewBox="0 0 24 24" fill="none" stroke="{color}" stroke-width="2"'
         ' stroke-linecap="round" stroke-linejoin="round">'

@@ -200,8 +200,8 @@ class TagFilterBar(QWidget):
         layout.addWidget(self._btn)
 
         # Mode toggle (OR / AND) applies only to includes.
-        self._mode_or = QRadioButton("浠讳竴")
-        self._mode_and = QRadioButton("鍏ㄩ儴")
+        self._mode_or = QRadioButton("任一")
+        self._mode_and = QRadioButton("全部")
         self._mode_or.setChecked(True)
         self._mode_or.toggled.connect(self._on_mode_changed)
         grp = QButtonGroup(self)
@@ -228,6 +228,25 @@ class TagFilterBar(QWidget):
             excludes=tuple(sorted(self._excludes)),
             mode="and" if self._mode == "and" else "or",
         )
+
+    def set_filter(self, tag_filter: TagFilter | None) -> None:
+        """Restore a filter without emitting ``filter_changed``.
+
+        This is useful when the widget is embedded in a dialog whose edits are
+        committed only after the user clicks Apply.
+        """
+        value = tag_filter or TagFilter()
+        available = set(self._available)
+        self._includes = set(value.includes) & available
+        self._excludes = (set(value.excludes) & available) - self._includes
+        self._mode = "and" if value.mode == "and" else "or"
+        self._mode_or.blockSignals(True)
+        self._mode_and.blockSignals(True)
+        self._mode_or.setChecked(self._mode == "or")
+        self._mode_and.setChecked(self._mode == "and")
+        self._mode_or.blockSignals(False)
+        self._mode_and.blockSignals(False)
+        self._update_button_text()
 
     def clear(self) -> None:
         if self._includes or self._excludes:

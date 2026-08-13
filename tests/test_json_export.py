@@ -72,3 +72,42 @@ def test_labelme_export_segment_polygon_does_not_emit_bbox_rectangle(tmp_path):
 
     data = json.loads((labels_dir / "sample.json").read_text(encoding="utf-8"))
     assert [shape["shape_type"] for shape in data["shapes"]] == ["polygon"]
+
+
+def test_labelme_import_reads_x_anylabeling_rotation_as_obb_polygon(tmp_path):
+    json_path = tmp_path / "sample.json"
+    json_path.write_text(
+        json.dumps(
+            {
+                "version": "2.5.4",
+                "shapes": [
+                    {
+                        "label": "label",
+                        "shape_type": "rotation",
+                        "points": [[10, 20], [80, 10], [90, 60], [20, 70]],
+                        "group_id": None,
+                        "direction": 0.1,
+                    }
+                ],
+                "imagePath": "sample.jpeg",
+                "imageWidth": 100,
+                "imageHeight": 80,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    imported = import_labelme_file(json_path)
+
+    assert imported is not None
+    assert len(imported.annotations) == 1
+    annotation = imported.annotations[0]
+    assert annotation.class_name == "label"
+    assert annotation.confirmed is True
+    assert annotation.polygon == [
+        (0.1, 0.25),
+        (0.8, 0.125),
+        (0.9, 0.75),
+        (0.2, 0.875),
+    ]
+    assert annotation.bbox == (0.5, 0.5, 0.8, 0.75)

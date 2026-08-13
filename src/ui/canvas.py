@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import math
 
 from PyQt5.QtWidgets import QWidget, QMenu, QAction, QActionGroup, QInputDialog
 from PyQt5.QtCore import Qt, pyqtSignal, QPointF, QRectF, QTimer, QByteArray
@@ -23,7 +24,7 @@ from PyQt5.QtGui import (
 )
 from PyQt5.QtSvg import QSvgRenderer
 
-from src.core.annotation import Annotation, Keypoint
+from src.core.annotation import Annotation, Keypoint, annotation_display_label
 from src.core.resources import LOADING_SVG
 from src.ui.icons import icon
 from src.ui.theme import PALETTE
@@ -35,6 +36,9 @@ HANDLE_SIZE = 6
 KEYPOINT_RADIUS = 5
 POLYGON_EDGE_HIT_RADIUS = 10
 POLYGON_INSERT_HANDLE_RADIUS = 4
+OBB_ROTATION_HANDLE_OFFSET = 24
+OBB_ROTATION_HANDLE_RADIUS = 6
+OBB_ROTATION_HIT_RADIUS = 11
 CROSSHAIR_GUIDE_WIDTH = 2
 CROSSHAIR_CENTER_WIDTH = 3
 LABEL_FONT_SIZE = 11
@@ -88,7 +92,7 @@ class AnnotationCanvas(QWidget):
         self._offset_y: float = 0.0
         self._view_initialized: bool = False
 
-        # Tool mode: "select", "draw_bbox", "draw_polygon", "draw_keypoint"
+        # Tool mode: "select", "draw_bbox", "draw_obb", "draw_polygon", "draw_keypoint"
         self.tool_mode: str = "select"
 
         # Annotations
@@ -103,6 +107,8 @@ class AnnotationCanvas(QWidget):
         self._draw_current: tuple[float, float] | None = None  # normalized
         self._mouse_pos: tuple[float, float] | None = None  # widget pixels
         self._polygon_points: list[tuple[float, float]] = []
+        self._polygon_point_limit: int | None = None
+        self._obb_editing_enabled = False
 
         # Dragging state (move/resize)
         self._dragging: bool = False
@@ -236,7 +242,7 @@ class AnnotationCanvas(QWidget):
         self.update()
 
     def set_tool_mode(self, mode: str) -> None:
-        """Set tool mode: 'select', 'draw_bbox', 'draw_polygon', 'draw_keypoint'."""
+        """Set tool mode: select, bbox, OBB, polygon, or keypoint drawing."""
         self.tool_mode = mode
         self._drawing = False
         self._draw_start = None
@@ -247,13 +253,22 @@ class AnnotationCanvas(QWidget):
             self._polygon_points = []
         if mode == "select":
             self._set_default_cursor()
-        elif mode in ("draw_bbox", "draw_polygon", "draw_keypoint"):
+        elif mode in ("draw_bbox", "draw_obb", "draw_polygon", "draw_keypoint"):
             self._set_click_cursor()
+
+    def set_polygon_point_limit(self, limit: int | None) -> None:
+        """Limit new polygons to a fixed number of vertices (four for OBB)."""
+        self._polygon_point_limit = limit if limit and limit >= 3 else None
+        self.cancel_polygon()
+
+    def set_obb_editing_enabled(self, enabled: bool) -> None:
+        """Enable OBB-specific context-menu and rotation-handle behavior."""
+        self._obb_editing_enabled = enabled
+        self.update()
 
     def request_tool_mode(self, mode: str) -> None:
         """Switch the canvas tool mode and notify owner widgets."""
         self.set_tool_mode(mode)
-
         self.tool_mode_requested.emit(mode)
 
     def set_locked(self, locked: bool) -> None:
@@ -551,7 +566,11 @@ class AnnotationCanvas(QWidget):
                 self._paint_label(painter, label_x, label_y, ann, color, in_conflict)
 
             if selected:
-                self._paint_polygon_handles(painter, ann.polygon)
+                if self._is_obb_annotation(ann):
+                    self._paint_obb_resize_handles(painter, ann.polygon)
+                    self._paint_obb_rotation_handle(painter, ann)
+                else:
+                    self._paint_polygon_handles(painter, ann.polygon)
 
         if ann.bbox and not ann.polygon:
             cx, cy, w, h = ann.bbox
@@ -645,10 +664,40 @@ class AnnotationCanvas(QWidget):
             painter.drawLine(int(px - arm), int(py), int(px + arm), int(py))
             painter.drawLine(int(px), int(py - arm), int(px), int(py + arm))
 
+    def _paint_obb_resize_handles(
+        self,
+        painter: QPainter,
+        polygon: list[tuple[float, float]],
+    ) -> None:
+        """Paint OBB corners as bbox-style square resize handles."""
+        painter.setPen(QPen(QColor(PALETTE["text"]), 1))
+        painter.setBrush(QBrush(QColor(PALETTE["primary"])))
+        hs = HANDLE_SIZE
+        for nx, ny in polygon:
+            px, py = self.norm_to_pixel(nx, ny)
+            painter.drawRect(QRectF(px - hs, py - hs, hs * 2, hs * 2))
+
+    def _paint_obb_rotation_handle(self, painter: QPainter, ann: Annotation) -> None:
+        positions = self._obb_rotation_handle_positions(ann)
+        if positions is None:
+            return
+        edge_point, handle_point = positions
+        painter.setPen(QPen(QColor(PALETTE["primary"]), 2))
+        painter.setBrush(QBrush(QColor(PALETTE["panel"])))
+        painter.drawLine(QPointF(*edge_point), QPointF(*handle_point))
+        painter.drawEllipse(
+            QPointF(*handle_point),
+            OBB_ROTATION_HANDLE_RADIUS,
+            OBB_ROTATION_HANDLE_RADIUS,
+        )
+
     def _paint_label(
         self, painter: QPainter, x: float, y: float, ann: Annotation, color: QColor, in_conflict: bool
     ) -> None:
-        label_text = ann.class_name
+        label_text = annotation_display_label(
+            ann,
+            (self._image_w, self._image_h),
+        )
         if in_conflict:
             label_text += " \u21c4"
         elif not ann.confirmed:
@@ -747,7 +796,19 @@ class AnnotationCanvas(QWidget):
         if event.button() != Qt.LeftButton:
             return
 
-        if self.tool_mode == "draw_bbox":
+        if self.tool_mode == "draw_obb":
+            handle = self._hit_test_handle(px, py)
+            if handle == "rotate_obb":
+                self._dragging = True
+                self._drag_type = handle
+                self._drag_ann_id = self._selected_id
+                self._drag_start_norm = self.pixel_to_norm(px, py)
+                ann = self.get_selected_annotation()
+                if ann:
+                    self._drag_ann_snapshot = ann.to_dict()
+                return
+
+        if self.tool_mode in ("draw_bbox", "draw_obb"):
             nx, ny = self._clamp_norm(*self.pixel_to_norm(px, py))
             self._drawing = True
             self._draw_start = (nx, ny)
@@ -761,6 +822,12 @@ class AnnotationCanvas(QWidget):
             if not self._polygon_points or self._distance_norm(self._polygon_points[-1], (nx, ny)) > 0.001:
                 self._polygon_points.append((nx, ny))
             self._draw_current = (nx, ny)
+            if (
+                self._polygon_point_limit is not None
+                and len(self._polygon_points) >= self._polygon_point_limit
+            ):
+                self.finish_polygon()
+                return
             self.update()
 
         elif self.tool_mode == "draw_keypoint":
@@ -864,7 +931,15 @@ class AnnotationCanvas(QWidget):
             return
 
         if self._dragging and self._drag_ann_id:
-            if self._drag_type in ("move", "move_kp") or self._drag_type.startswith("poly_vertex_"):
+            if self._drag_type == "rotate_obb":
+                self.setCursor(Qt.CrossCursor)
+            elif self._drag_type.startswith("resize_obb_"):
+                vertex_idx = int(self._drag_type.rsplit("_", 1)[1])
+                self.setCursor(Qt.SizeFDiagCursor if vertex_idx % 2 == 0 else Qt.SizeBDiagCursor)
+            elif (
+                self._drag_type in ("move", "move_kp")
+                or self._drag_type.startswith("poly_vertex_")
+            ):
                 self._set_click_cursor()
             nx, ny = self.pixel_to_norm(px, py)
             self._handle_drag(nx, ny)
@@ -880,7 +955,12 @@ class AnnotationCanvas(QWidget):
             handle = self._hit_test_handle(px, py)
             if handle:
                 self._clear_polygon_edge_hover()
-                if handle.startswith("poly_vertex_"):
+                if handle == "rotate_obb":
+                    self.setCursor(Qt.CrossCursor)
+                elif handle.startswith("resize_obb_"):
+                    vertex_idx = int(handle.rsplit("_", 1)[1])
+                    self.setCursor(Qt.SizeFDiagCursor if vertex_idx % 2 == 0 else Qt.SizeBDiagCursor)
+                elif handle.startswith("poly_vertex_"):
                     self._set_click_cursor()
                 elif "tl" in handle or "br" in handle:
                     self.setCursor(Qt.SizeFDiagCursor)
@@ -925,7 +1005,11 @@ class AnnotationCanvas(QWidget):
         if event.button() != Qt.LeftButton:
             return
 
-        if self._drawing and self._draw_start and self.tool_mode == "draw_bbox":
+        if (
+            self._drawing
+            and self._draw_start
+            and self.tool_mode in ("draw_bbox", "draw_obb")
+        ):
             nx, ny = self._clamp_norm(*self.pixel_to_norm(px, py))
             self._draw_current = (nx, ny)
             sx, sy = self._draw_start
@@ -954,8 +1038,11 @@ class AnnotationCanvas(QWidget):
 
         if self._dragging:
             if (
-                self._drag_type in ("move", "resize_tl", "resize_tr", "resize_bl", "resize_br", "move_kp")
-                or self._drag_type.startswith("poly_vertex_")
+                self._drag_type in (
+                    "move", "resize_tl", "resize_tr", "resize_bl", "resize_br",
+                    "move_kp", "rotate_obb",
+                )
+                or self._drag_type.startswith(("poly_vertex_", "resize_obb_"))
             ):
                 self.annotation_modified.emit(self._drag_ann_id)
             self._dragging = False
@@ -1124,8 +1211,10 @@ class AnnotationCanvas(QWidget):
             ("select", "移动", "cursor"),
             ("draw_bbox", "矩形框", "bbox"),
             ("draw_polygon", "多边形", "polygon"),
-            ("draw_keypoint", "关键点", "keypoint"),
         ]
+        if self._obb_editing_enabled:
+            tools.append(("draw_obb", "旋转框", "obb"))
+        tools.append(("draw_keypoint", "关键点", "keypoint"))
         for mode, text, icon_name in tools:
             action = menu.addAction(icon(icon_name), text)
             action.setCheckable(True)
@@ -1205,6 +1294,53 @@ class AnnotationCanvas(QWidget):
                 ann.confirmed = True
             self.annotations_changed.emit()
 
+        elif self._drag_type == "rotate_obb" and self._drag_ann_snapshot:
+            original = self._drag_ann_snapshot.get("polygon", [])
+            if len(original) != 4:
+                return
+            center_x = sum(point[0] for point in original) / 4
+            center_y = sum(point[1] for point in original) / 4
+            image_w = max(1, self._image_w)
+            image_h = max(1, self._image_h)
+            start_x = (self._drag_start_norm[0] - center_x) * image_w
+            start_y = (self._drag_start_norm[1] - center_y) * image_h
+            current_x = (nx - center_x) * image_w
+            current_y = (ny - center_y) * image_h
+            if math.hypot(start_x, start_y) < 1e-9 or math.hypot(current_x, current_y) < 1e-9:
+                return
+            angle = math.atan2(current_y, current_x) - math.atan2(start_y, start_x)
+            cos_a = math.cos(angle)
+            sin_a = math.sin(angle)
+            rotated = []
+            for point_x, point_y in original:
+                offset_x = (point_x - center_x) * image_w
+                offset_y = (point_y - center_y) * image_h
+                rotated.append((
+                    center_x + (offset_x * cos_a - offset_y * sin_a) / image_w,
+                    center_y + (offset_x * sin_a + offset_y * cos_a) / image_h,
+                ))
+            min_x = min(point[0] for point in rotated)
+            max_x = max(point[0] for point in rotated)
+            min_y = min(point[1] for point in rotated)
+            max_y = max(point[1] for point in rotated)
+            shift_x = -min_x if min_x < 0 else (1 - max_x if max_x > 1 else 0)
+            shift_y = -min_y if min_y < 0 else (1 - max_y if max_y > 1 else 0)
+            ann.polygon = [(x + shift_x, y + shift_y) for x, y in rotated]
+            self._sync_polygon_bbox(ann)
+            if not ann.confirmed:
+                ann.confirmed = True
+            self.annotations_changed.emit()
+
+        elif self._drag_type.startswith("resize_obb_") and self._drag_ann_snapshot:
+            try:
+                vertex_idx = int(self._drag_type.rsplit("_", 1)[1])
+            except ValueError:
+                return
+            self._resize_obb_corner(ann, vertex_idx, nx, ny)
+            if not ann.confirmed:
+                ann.confirmed = True
+            self.annotations_changed.emit()
+
         elif self._drag_type.startswith("poly_vertex_"):
             try:
                 vertex_idx = int(self._drag_type.rsplit("_", 1)[1])
@@ -1250,6 +1386,158 @@ class AnnotationCanvas(QWidget):
                 ann.confirmed = True
             self.annotations_changed.emit()
 
+    def _resize_obb_corner(
+        self,
+        ann: Annotation,
+        vertex_idx: int,
+        nx: float,
+        ny: float,
+    ) -> None:
+        """Resize an OBB from one corner while preserving a true rectangle.
+
+        The opposite corner stays fixed. The two adjacent corners follow the
+        dragged corner along the box's local axes, matching bbox corner-resize
+        interaction without allowing an arbitrary four-sided polygon.
+        """
+        if not self._drag_ann_snapshot or not 0 <= vertex_idx < 4:
+            return
+        original = self._drag_ann_snapshot.get("polygon", [])
+        if len(original) != 4:
+            return
+
+        image_w = max(1, self._image_w)
+        image_h = max(1, self._image_h)
+
+        def to_image_point(point) -> tuple[float, float]:
+            return point[0] * image_w, point[1] * image_h
+
+        points = [to_image_point(point) for point in original]
+        opposite_idx = (vertex_idx + 2) % 4
+        next_idx = (vertex_idx + 1) % 4
+        previous_idx = (vertex_idx - 1) % 4
+        anchor_x, anchor_y = points[opposite_idx]
+
+        next_vector = (
+            points[next_idx][0] - anchor_x,
+            points[next_idx][1] - anchor_y,
+        )
+        previous_vector = (
+            points[previous_idx][0] - anchor_x,
+            points[previous_idx][1] - anchor_y,
+        )
+        next_length = math.hypot(*next_vector)
+        if next_length < 1e-9:
+            return
+        next_axis = (
+            next_vector[0] / next_length,
+            next_vector[1] / next_length,
+        )
+
+        # Gram-Schmidt also repairs slightly malformed legacy OBBs on resize.
+        projection = (
+            previous_vector[0] * next_axis[0]
+            + previous_vector[1] * next_axis[1]
+        )
+        orthogonal_previous = (
+            previous_vector[0] - projection * next_axis[0],
+            previous_vector[1] - projection * next_axis[1],
+        )
+        previous_length = math.hypot(*orthogonal_previous)
+        if previous_length < 1e-9:
+            return
+        previous_axis = (
+            orthogonal_previous[0] / previous_length,
+            orthogonal_previous[1] / previous_length,
+        )
+        if (
+            previous_axis[0] * previous_vector[0]
+            + previous_axis[1] * previous_vector[1]
+        ) < 0:
+            previous_axis = (-previous_axis[0], -previous_axis[1])
+
+        clamped_x, clamped_y = self._clamp_norm(nx, ny)
+        delta = (
+            clamped_x * image_w - anchor_x,
+            clamped_y * image_h - anchor_y,
+        )
+        next_size = max(
+            1.0,
+            delta[0] * next_axis[0] + delta[1] * next_axis[1],
+        )
+        previous_size = max(
+            1.0,
+            delta[0] * previous_axis[0] + delta[1] * previous_axis[1],
+        )
+
+        def ray_limit(axis: tuple[float, float]) -> float:
+            limits: list[float] = []
+            if axis[0] > 1e-12:
+                limits.append((image_w - anchor_x) / axis[0])
+            elif axis[0] < -1e-12:
+                limits.append(-anchor_x / axis[0])
+            if axis[1] > 1e-12:
+                limits.append((image_h - anchor_y) / axis[1])
+            elif axis[1] < -1e-12:
+                limits.append(-anchor_y / axis[1])
+            return max(0.0, min(limits)) if limits else float("inf")
+
+        next_size = min(next_size, ray_limit(next_axis))
+        previous_size = min(previous_size, ray_limit(previous_axis))
+
+        def resized_points(size_a: float, size_b: float) -> dict[int, tuple[float, float]]:
+            next_point = (
+                anchor_x + next_axis[0] * size_a,
+                anchor_y + next_axis[1] * size_a,
+            )
+            previous_point = (
+                anchor_x + previous_axis[0] * size_b,
+                anchor_y + previous_axis[1] * size_b,
+            )
+            dragged_point = (
+                next_point[0] + previous_point[0] - anchor_x,
+                next_point[1] + previous_point[1] - anchor_y,
+            )
+            return {
+                opposite_idx: (anchor_x, anchor_y),
+                next_idx: next_point,
+                previous_idx: previous_point,
+                vertex_idx: dragged_point,
+            }
+
+        def points_fit(candidate: dict[int, tuple[float, float]]) -> bool:
+            return all(
+                -1e-9 <= x <= image_w + 1e-9
+                and -1e-9 <= y <= image_h + 1e-9
+                for x, y in candidate.values()
+            )
+
+        candidate = resized_points(next_size, previous_size)
+        if not points_fit(candidate):
+            # A dragged corner can be inside while an adjacent corner crosses
+            # the image edge. Move toward the one-pixel minimum rectangle until
+            # every corner is valid; the feasible image region is convex.
+            minimum = resized_points(1.0, 1.0)
+            if not points_fit(minimum):
+                return
+            low, high = 0.0, 1.0
+            for _ in range(32):
+                mid = (low + high) / 2.0
+                size_a = 1.0 + (next_size - 1.0) * mid
+                size_b = 1.0 + (previous_size - 1.0) * mid
+                if points_fit(resized_points(size_a, size_b)):
+                    low = mid
+                else:
+                    high = mid
+            next_size = 1.0 + (next_size - 1.0) * low
+            previous_size = 1.0 + (previous_size - 1.0) * low
+            candidate = resized_points(next_size, previous_size)
+
+        ann.polygon = [
+            (candidate[index][0] / image_w, candidate[index][1] / image_h)
+            for index in range(4)
+        ]
+        self._sync_polygon_bbox(ann)
+
     def _set_polygon_edge_hover(
         self,
         edge_index: int,
@@ -1288,6 +1576,11 @@ class AnnotationCanvas(QWidget):
         """
         ann = self.get_selected_annotation()
         if ann is None or len(ann.polygon) < 3:
+            return None
+        if (
+            (self._polygon_point_limit is not None and len(ann.polygon) >= self._polygon_point_limit)
+            or self._is_obb_annotation(ann)
+        ):
             return None
 
         edge_hit = self._nearest_polygon_edge(ann.polygon, px, py)
@@ -1397,11 +1690,21 @@ class AnnotationCanvas(QWidget):
         if not ann:
             return None
 
+        is_obb = self._is_obb_annotation(ann)
+        if is_obb:
+            positions = self._obb_rotation_handle_positions(ann)
+            if positions is not None:
+                _edge_point, handle_point = positions
+                if math.hypot(px - handle_point[0], py - handle_point[1]) <= OBB_ROTATION_HIT_RADIUS:
+                    return "rotate_obb"
+
         if ann.polygon:
             for idx, (nx, ny) in enumerate(ann.polygon):
                 hpx, hpy = self.norm_to_pixel(nx, ny)
                 if abs(px - hpx) <= HANDLE_SIZE + 4 and abs(py - hpy) <= HANDLE_SIZE + 4:
-                    return f"poly_vertex_{idx}"
+                    return f"resize_obb_{idx}" if is_obb else f"poly_vertex_{idx}"
+            if is_obb:
+                return None
 
         if not ann.bbox:
             return None
@@ -1418,6 +1721,43 @@ class AnnotationCanvas(QWidget):
             if abs(px - hpx) <= HANDLE_SIZE + 2 and abs(py - hpy) <= HANDLE_SIZE + 2:
                 return handle_name
         return None
+
+    def _is_obb_annotation(self, ann: Annotation) -> bool:
+        """Return whether an annotation should use rigid OBB editing tools."""
+        return (
+            self._obb_editing_enabled
+            and ann.bbox is not None
+            and len(ann.polygon) == 4
+        )
+
+    def _obb_rotation_handle_positions(
+        self,
+        ann: Annotation,
+    ) -> tuple[tuple[float, float], tuple[float, float]] | None:
+        """Return the outward top-edge midpoint and rotation-handle position."""
+        if len(ann.polygon) != 4:
+            return None
+        points = [self.norm_to_pixel(x, y) for x, y in ann.polygon]
+        center_x = sum(point[0] for point in points) / 4
+        center_y = sum(point[1] for point in points) / 4
+        edge_midpoints = [
+            (
+                (points[index][0] + points[(index + 1) % 4][0]) / 2,
+                (points[index][1] + points[(index + 1) % 4][1]) / 2,
+            )
+            for index in range(4)
+        ]
+        edge_x, edge_y = min(edge_midpoints, key=lambda point: point[1])
+        vector_x = edge_x - center_x
+        vector_y = edge_y - center_y
+        length = math.hypot(vector_x, vector_y)
+        if length < 1e-6:
+            return None
+        handle = (
+            edge_x + vector_x / length * OBB_ROTATION_HANDLE_OFFSET,
+            edge_y + vector_y / length * OBB_ROTATION_HANDLE_OFFSET,
+        )
+        return (edge_x, edge_y), handle
 
     def _hit_test_keypoint(self, px: float, py: float) -> tuple[str, int] | None:
         """Check if pixel pos hits a keypoint. Returns (ann_id, kp_index) or None."""
@@ -1536,6 +1876,39 @@ class AnnotationCanvas(QWidget):
         self.update()
         return ann
 
+    def create_obb_from_draw(self, class_name: str, class_id: int) -> Annotation | None:
+        """Create an axis-aligned OBB that can subsequently be rotated."""
+        if not self._draw_start or not self._draw_current:
+            return None
+        sx, sy = self._draw_start
+        ex, ey = self._draw_current
+        x1, x2 = sorted((sx, ex))
+        y1, y2 = sorted((sy, ey))
+        w = x2 - x1
+        h = y2 - y1
+        min_w, min_h = self._minimum_bbox_size_norm()
+        if w < min_w or h < min_h:
+            return None
+
+        polygon = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
+        ann = Annotation(
+            class_name=class_name,
+            class_id=class_id,
+            bbox=((x1 + x2) / 2, (y1 + y2) / 2, w, h),
+            polygon=polygon,
+            confirmed=True,
+            source="manual",
+        )
+        ann.clamp()
+        self._annotations.append(ann)
+        self.select_annotation(ann.id)
+        self.annotation_created.emit(ann)
+        self.annotations_changed.emit()
+        self._draw_start = None
+        self._draw_current = None
+        self.update()
+        return ann
+
     def create_polygon_from_draw(self, class_name: str, class_id: int) -> Annotation | None:
         """Create a polygon annotation from the in-progress point list."""
         polygon = list(self._polygon_points)
@@ -1544,9 +1917,24 @@ class AnnotationCanvas(QWidget):
         if len(polygon) < 3:
             self.cancel_polygon()
             return None
+        if self._polygon_point_limit is not None and len(polygon) != self._polygon_point_limit:
+            self.cancel_polygon()
+            return None
+        if self._polygon_point_limit == 4:
+            center_x = sum(point[0] for point in polygon) / 4
+            center_y = sum(point[1] for point in polygon) / 4
+            polygon.sort(key=lambda point: math.atan2(point[1] - center_y, point[0] - center_x))
+        bbox = None
+        if self._polygon_point_limit == 4:
+            xs = [point[0] for point in polygon]
+            ys = [point[1] for point in polygon]
+            x1, x2 = min(xs), max(xs)
+            y1, y2 = min(ys), max(ys)
+            bbox = ((x1 + x2) / 2, (y1 + y2) / 2, x2 - x1, y2 - y1)
         ann = Annotation(
             class_name=class_name,
             class_id=class_id,
+            bbox=bbox,
             polygon=polygon,
             confirmed=True,
             source="manual",
