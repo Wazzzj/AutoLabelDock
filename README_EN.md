@@ -142,6 +142,7 @@ It turns "annotation" and "training" into a single closed loop: label a batch of
 | VOC OBB (xml) | ❌ | ✅ | OBB |
 | COCO (json) | ✅ | ✅ | Detection / Pose |
 | labelme (json) | ✅ | ✅ | Detection / Pose |
+| X-AnyLabeling OBB (json) | ✅ | ✅ | OBB |
 | iSAT (json) | ✅ | ✅ | Detection / Segmentation |
 | ImageFolder | ✅ | ✅ | Classification (folder-per-class) |
 | CSV | ✅ | ❌ | Classification |
@@ -150,7 +151,7 @@ iSAT export mirrors image subdirectories under `labels/` and writes one same-ste
 
 OBB projects use the normalized Ultralytics format `class_id x1 y1 x2 y2 x3 y3 x4 y4`. Set the project task to `obb` before importing nine-column YOLO labels so they are not mistaken for a small pose layout. VOC OBB import accepts `robndbox` XML with radian angles, and `classes.txt` accepts both one class name per line and indexed entries such as `0:label`.
 
-Labelme / X-AnyLabeling JSON oriented boxes stored as four pixel-coordinate points with `shape_type: "rotation"` are also imported as four-corner OBBs. Images and JSON files must share the same stem and live under the configured `images/` and `labels/` directories.
+OBB projects can export X-AnyLabeling-style JSON with four pixel-coordinate points, `shape_type: "rotation"`, and a radian `direction`, while preserving image subdirectories. Labelme / X-AnyLabeling JSON oriented boxes stored in this structure are also imported as four-corner OBBs. Images and JSON files must share the same stem and live under the configured `images/` and `labels/` directories.
 
 Press `O` or choose **Oriented box** from the canvas context menu, then hold the left mouse button and drag out a rectangle. Select the box and drag the circular handle outside its top edge to rotate the complete box around its center; dragging a corner resizes it like a regular box while preserving a true rectangle.
 

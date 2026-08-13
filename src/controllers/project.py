@@ -204,6 +204,7 @@ class ProjectController:
             self._parent,
             data_versions=project.list_data_folders(),
             active_data_version=project.config.active_data_folder,
+            task_type=project.config.task_type,
         )
         if not dlg.exec_():
             return None
@@ -434,6 +435,11 @@ class ProjectController:
             if fmt == "iSAT" and (len(ann.polygon) >= 3 or ann.bbox is not None):
                 return True
             if fmt == "labelme" and (ann.bbox is not None or ann.polygon or ann.keypoints):
+                return True
+            if fmt == "X-AnyLabeling-OBB" and (
+                len(ann.polygon) == 4
+                or (ann.bbox is not None and not ann.polygon)
+            ):
                 return True
         return False
 

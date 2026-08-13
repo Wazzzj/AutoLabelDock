@@ -19,6 +19,7 @@ class ExporterInfo:
         output_is_file: bool = False,
         needs_source_dir: bool = False,
         needs_task_type: bool = False,
+        task_types: set[str] | None = None,
     ):
         self.name = name
         self.label = label
@@ -27,6 +28,7 @@ class ExporterInfo:
         self.output_is_file = output_is_file
         self.needs_source_dir = needs_source_dir
         self.needs_task_type = needs_task_type
+        self.task_types = frozenset(task_types) if task_types else None
 
 
 class ImporterInfo:
@@ -66,12 +68,14 @@ class ExportRegistry:
         output_is_file: bool = False,
         needs_source_dir: bool = False,
         needs_task_type: bool = False,
+        task_types: set[str] | None = None,
     ) -> None:
         self._exporters[name] = ExporterInfo(
             name=name, label=label, export_fn=export_fn,
             needs_classes=needs_classes, output_is_file=output_is_file,
             needs_source_dir=needs_source_dir,
             needs_task_type=needs_task_type,
+            task_types=task_types,
         )
 
     def get(self, name: str) -> ExporterInfo | None:
@@ -96,6 +100,10 @@ class ExportRegistry:
         info = self._exporters.get(name)
         if info is None:
             raise ValueError(f"Unknown export format: {name}")
+        if info.task_types is not None and task_type not in info.task_types:
+            raise ValueError(
+                f"{info.label} 不适用于 {task_type} 项目"
+            )
         output = Path(output_dir)
         if info.output_is_file:
             output = output / f"{name.lower()}.json"
@@ -162,6 +170,7 @@ def _register_builtin_formats() -> None:
     from src.core.formats.labelme import export_labelme, import_labelme
     from src.core.formats.isat import export_isat, import_isat
     from src.core.formats.voc_obb import import_voc_obb
+    from src.core.formats.xanylabeling_obb import export_xanylabeling_obb
     from src.core.formats.imagefolder import (
         ImageFolderImporter,
         export_imagefolder,
@@ -178,6 +187,14 @@ def _register_builtin_formats() -> None:
     _registry.register("COCO", "COCO (json)", export_coco, needs_classes=True, output_is_file=True)
     _registry.register("labelme", "labelme (json)", export_labelme, needs_classes=False)
     _registry.register("iSAT", "iSAT (json)", export_isat, needs_classes=False)
+    _registry.register(
+        "X-AnyLabeling-OBB",
+        "X-AnyLabeling OBB (json)",
+        export_xanylabeling_obb,
+        needs_classes=False,
+        needs_task_type=True,
+        task_types={"obb"},
+    )
     _registry.register(
         "ImageFolder", "ImageFolder (分类)", export_imagefolder,
         needs_classes=False, needs_source_dir=True,

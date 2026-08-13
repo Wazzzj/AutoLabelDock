@@ -2,7 +2,7 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt5.QtGui import QPixmap
+from PyQt5.QtGui import QColor, QImage, QPainter, QPixmap
 from PyQt5.QtWidgets import QApplication
 
 from src.core.annotation import Annotation
@@ -94,3 +94,25 @@ def test_bbox_resize_can_shrink_to_one_image_pixel():
     assert ann.bbox is not None
     assert abs(ann.bbox[2] - 0.001) < 1e-12
     assert abs(ann.bbox[3] - 0.001) < 1e-12
+
+
+def test_annotation_canvas_label_background_is_fully_transparent():
+    _app()
+    canvas = AnnotationCanvas()
+    canvas._image_w = 100
+    canvas._image_h = 100
+    image = QImage(160, 80, QImage.Format_ARGB32)
+    background = QColor("#123456")
+    image.fill(background)
+    painter = QPainter(image)
+    canvas._paint_label(
+        painter,
+        20,
+        40,
+        Annotation("defect", 0, bbox=(0.5, 0.5, 0.2, 0.2)),
+        QColor("#ff0000"),
+        False,
+    )
+    painter.end()
+
+    assert image.pixelColor(20, 20) == background

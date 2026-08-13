@@ -114,19 +114,19 @@ class LabelPanel(QWidget):
         self._toolbar.addSeparator()
 
         self._btn_undo = QPushButton(icon("undo"), "")
-        self._btn_undo.setToolTip("鎾ら攢 (Ctrl+Z)")
+        self._btn_undo.setToolTip("回撤 (Ctrl+Z)")
         self._btn_undo.setFixedWidth(36)
         set_button_role(self._btn_undo, "icon")
         self._toolbar.addWidget(self._btn_undo)
 
         self._btn_redo = QPushButton(icon("redo"), "")
-        self._btn_redo.setToolTip("閲嶅仛 (Ctrl+Y)")
+        self._btn_redo.setToolTip("前进 (Ctrl+Y)")
         self._btn_redo.setFixedWidth(36)
         set_button_role(self._btn_redo, "icon")
         self._toolbar.addWidget(self._btn_redo)
 
         self._btn_save = QPushButton(icon("save"), "")
-        self._btn_save.setToolTip("淇濆瓨 (Ctrl+S)")
+        self._btn_save.setToolTip("保存 (Ctrl+S)")
         self._btn_save.setFixedWidth(36)
         set_button_role(self._btn_save, "icon")
         self._toolbar.addWidget(self._btn_save)

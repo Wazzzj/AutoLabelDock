@@ -121,24 +121,75 @@ def annotation_geometry(
     return None
 
 
+def annotation_center(annotation: Annotation) -> tuple[float, float] | None:
+    """Return the normalized center used for ROI control.
+
+    Detection boxes use their explicit center. OBB and instance-segmentation
+    polygons use the shoelace area centroid, which follows the actual geometry
+    instead of the center of its axis-aligned bounds.
+    """
+    if annotation.polygon and len(annotation.polygon) >= 3:
+        points = annotation.polygon
+        cross_sum = 0.0
+        centroid_x_sum = 0.0
+        centroid_y_sum = 0.0
+        for (x1, y1), (x2, y2) in zip(points, points[1:] + points[:1]):
+            cross = x1 * y2 - x2 * y1
+            cross_sum += cross
+            centroid_x_sum += (x1 + x2) * cross
+            centroid_y_sum += (y1 + y2) * cross
+        if abs(cross_sum) > 1e-12:
+            return (
+                centroid_x_sum / (3.0 * cross_sum),
+                centroid_y_sum / (3.0 * cross_sum),
+            )
+        xs = [point[0] for point in points]
+        ys = [point[1] for point in points]
+        return (sum(xs) / len(xs), sum(ys) / len(ys))
+    if annotation.bbox is not None:
+        return annotation.bbox[0], annotation.bbox[1]
+    return None
+
+
+def annotation_pixel_geometry(
+    annotation: Annotation,
+    image_size: tuple[int, int],
+) -> tuple[float, float, float, float, float] | None:
+    """Return width, height, area and center coordinates in image pixels."""
+    geometry = annotation_geometry(annotation)
+    if geometry is None:
+        return None
+    image_width, image_height = image_size
+    if image_width <= 0 or image_height <= 0:
+        return None
+    width, height, area, center_x, center_y = geometry
+    return (
+        width * image_width,
+        height * image_height,
+        area * image_width * image_height,
+        center_x * image_width,
+        center_y * image_height,
+    )
+
+
 def annotation_area_text(
     annotation: Annotation,
     image_size: tuple[int, int] | None = None,
     *,
     include_pixels: bool = True,
 ) -> str:
-    """Format an annotation area for canvas/preview labels."""
-    geometry = annotation_geometry(annotation)
+    """Format an annotation area in pixels for canvas/preview labels.
+
+    ``include_pixels`` is retained for call-site compatibility. Pixel area is
+    now the canonical display and percentages are intentionally omitted.
+    """
+    if image_size is None:
+        return ""
+    geometry = annotation_pixel_geometry(annotation, image_size)
     if geometry is None:
         return ""
-    normalized_area = geometry[2]
-    text = f"面积 {normalized_area * 100:.2f}%"
-    if include_pixels and image_size is not None:
-        image_width, image_height = image_size
-        if image_width > 0 and image_height > 0:
-            pixel_area = round(normalized_area * image_width * image_height)
-            text += f" ({pixel_area} px²)"
-    return text
+    pixel_area = round(geometry[2])
+    return f"面积 {pixel_area} px²"
 
 
 def annotation_display_label(

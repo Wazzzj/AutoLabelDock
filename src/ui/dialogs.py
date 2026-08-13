@@ -138,12 +138,14 @@ class ExportDialog(QDialog):
         parent=None,
         data_versions: list[str] | None = None,
         active_data_version: str = "",
+        task_type: str = "",
     ):
         super().__init__(parent)
         self.setWindowTitle("导出标注")
         self.setMinimumWidth(400)
         self._data_versions = data_versions or []
         self._active_data_version = active_data_version
+        self._task_type = task_type
         self._init_ui()
 
     def _init_ui(self) -> None:
@@ -156,6 +158,12 @@ class ExportDialog(QDialog):
         registry = get_export_registry()
         for name in registry.list_names():
             info = registry.get(name)
+            if (
+                info is not None
+                and info.task_types is not None
+                and self._task_type not in info.task_types
+            ):
+                continue
             self._format_combo.addItem(info.label if info else name, name)
         form.addRow("导出格式:", self._format_combo)
 

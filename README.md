@@ -117,6 +117,7 @@ AutoLabel Dock 是一个基于 **PyQt5 + Ultralytics YOLO** 的桌面端图像�
 | VOC OBB xml | 不支持 | 支持 | 旋转框 |
 | COCO json | 支持 | 支持 | 检测 / 分割 / 姿态 |
 | labelme json | 支持 | 支持 | 检测 / 分割 / 姿态 |
+| X-AnyLabeling OBB json | 支持 | 支持 | 旋转框 |
 | iSAT json | 支持 | 支持 | 检测 / 分割 |
 | ImageFolder | 支持 | 支持 | 分类 |
 | CSV | 支持 | 不支持 | 分类 |
@@ -125,7 +126,7 @@ iSAT 导出会在 `labels/` 下按图片子目录生成同名 JSON，写入标�
 
 OBB 项目导入和训练使用 Ultralytics YOLO OBB 的归一化四点格式：`class_id x1 y1 x2 y2 x3 y3 x4 y4`。导入 9 列 YOLO 标签前应先将项目类型设为 `obb`，避免与少量关键点 pose 数据产生格式歧义。`classes.txt` 同时兼容每行一个类别和 `0:label` 形式。VOC OBB 导入支持 `robndbox` 的 `cx`、`cy`、`w`、`h`、`angle` 字段，其中角度按弧度解析。
 
-Labelme / X-AnyLabeling JSON 中使用四个像素坐标点和 `shape_type: "rotation"` 保存的旋转框，也会作为四点 OBB 导入；图片与 JSON 需要同名，并分别位于项目配置对应的 `images/` 和 `labels/` 目录。
+OBB 项目可导出 X-AnyLabeling 风格 JSON：每个旋转框写为四个像素坐标点、`shape_type: "rotation"` 和 `direction` 弧度角，并保留图片子目录结构。Labelme / X-AnyLabeling JSON 中使用该结构保存的旋转框，也会作为四点 OBB 导入；图片与 JSON 需要同名，并分别位于项目配置对应的 `images/` 和 `labels/` 目录。
 
 OBB 标注可按 `O` 或在画布右键菜单选择“旋转框”，按住鼠标左键直接拖出矩形。创建后选中旋转框，拖动框外的圆形旋转手柄可绕中心整体旋转；拖动四角可像普通矩形框一样缩放，并始终保持矩形形状。
 

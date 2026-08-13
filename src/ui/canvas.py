@@ -711,10 +711,7 @@ class AnnotationCanvas(QWidget):
         label_rect = QRectF(x, y - th, tw, th)
         if label_rect.top() < 0:
             label_rect.moveTop(y)
-        bg_color = QColor(color)
-        bg_color.setAlpha(200)
-        painter.fillRect(label_rect, bg_color)
-        painter.setPen(QColor(PALETTE["ink"]))
+        painter.setPen(color)
         painter.drawText(label_rect, Qt.AlignCenter, label_text)
 
     def _paint_polygon_preview(self, painter: QPainter) -> None:

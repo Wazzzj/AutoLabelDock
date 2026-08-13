@@ -1,11 +1,11 @@
 """Read-only project preview grid with annotation overlays."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from PyQt5.QtCore import Qt, QPointF, QRect, QSize, pyqtSignal
-from PyQt5.QtGui import QColor, QFont, QPainter, QPen, QPixmap, QPolygonF
+from PyQt5.QtCore import Qt, QPointF, QRect, QRectF, QSize, pyqtSignal
+from PyQt5.QtGui import QBrush, QColor, QFont, QPainter, QPen, QPixmap, QPolygonF
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -33,8 +33,9 @@ from PyQt5.QtWidgets import (
 
 from src.core.annotation import (
     ImageAnnotation,
+    annotation_center,
     annotation_display_label,
-    annotation_geometry,
+    annotation_pixel_geometry,
 )
 from src.core.annotation_classes import merged_project_annotation_classes
 from src.core.label_io import load_annotation
@@ -50,9 +51,11 @@ from src.utils.image import get_image_size, load_pixmap
 _PATH_ROLE = Qt.UserRole
 _ANNOTATION_ROLE = Qt.UserRole + 1
 _SUMMARY_ROLE = Qt.UserRole + 2
+_ROI_ROLE = Qt.UserRole + 3
 _LABEL_BAR_H = 22
 _CARD_PAD = 8
 _ZOOM_FACTOR = 1.15
+_ROI_CLOSE_RADIUS_PX = 12
 _ALL_DATA_FOLDERS_TEXT = "所有版本"
 
 
@@ -82,10 +85,70 @@ class NumericRange:
 
 
 @dataclass(frozen=True)
-class PreviewAdvancedFilter:
-    """Image Tag and same-annotation numeric constraints for preview."""
+class PreviewRoi:
+    """Session-only normalized ROI used by preview analysis, never training."""
 
-    tag_filter: TagFilter = field(default_factory=TagFilter)
+    shape: str
+    points: tuple[tuple[float, float], ...]
+
+
+def _point_in_polygon(
+    point: tuple[float, float],
+    polygon: tuple[tuple[float, float], ...],
+) -> bool:
+    if len(polygon) < 3:
+        return False
+    x, y = point
+    inside = False
+    previous = polygon[-1]
+    for current in polygon:
+        x1, y1 = previous
+        x2, y2 = current
+        if (y1 > y) != (y2 > y):
+            intersection_x = (x2 - x1) * (y - y1) / (y2 - y1) + x1
+            if x <= intersection_x:
+                inside = not inside
+        previous = current
+    return inside
+
+
+def _roi_contains_point(roi: PreviewRoi, point: tuple[float, float]) -> bool:
+    if roi.shape in {"rectangle", "ellipse"} and len(roi.points) == 2:
+        (x1, y1), (x2, y2) = roi.points
+        left, right = sorted((x1, x2))
+        top, bottom = sorted((y1, y2))
+        if roi.shape == "rectangle":
+            return left <= point[0] <= right and top <= point[1] <= bottom
+        radius_x = (right - left) / 2.0
+        radius_y = (bottom - top) / 2.0
+        if radius_x <= 0 or radius_y <= 0:
+            return False
+        center_x = (left + right) / 2.0
+        center_y = (top + bottom) / 2.0
+        return (
+            ((point[0] - center_x) / radius_x) ** 2
+            + ((point[1] - center_y) / radius_y) ** 2
+            <= 1.0
+        )
+    if roi.shape == "polygon":
+        return _point_in_polygon(point, roi.points)
+    return False
+
+
+def _annotation_inside_rois(annotation, rois: list[PreviewRoi]) -> bool:
+    """Use bbox center or polygon centroid for ROI membership."""
+    if not rois:
+        return True
+    center = annotation_center(annotation)
+    if center is None:
+        return False
+    return any(_roi_contains_point(roi, center) for roi in rois)
+
+
+@dataclass(frozen=True)
+class PreviewAdvancedFilter:
+    """Numeric acceptance constraints for one detection-box class."""
+
     width: NumericRange = field(default_factory=NumericRange)
     height: NumericRange = field(default_factory=NumericRange)
     area: NumericRange = field(default_factory=NumericRange)
@@ -107,13 +170,12 @@ class PreviewAdvancedFilter:
         return any(value.is_active() for value in self.annotation_ranges())
 
     def active_count(self) -> int:
-        return int(not self.tag_filter.is_empty()) + sum(
-            value.is_active() for value in self.annotation_ranges()
-        )
+        return sum(value.is_active() for value in self.annotation_ranges())
 
 
 def _annotation_matches_advanced_filter(
     annotation,
+    image_size: tuple[int, int],
     advanced_filter: PreviewAdvancedFilter,
 ) -> bool:
     if (
@@ -131,7 +193,7 @@ def _annotation_matches_advanced_filter(
     )
     if not any(value.is_active() for value in geometry_ranges):
         return True
-    geometry = annotation_geometry(annotation)
+    geometry = annotation_pixel_geometry(annotation, image_size)
     if geometry is None:
         return False
     return all(
@@ -140,25 +202,86 @@ def _annotation_matches_advanced_filter(
     )
 
 
+def _annotation_control_result(
+    annotation,
+    image_size: tuple[int, int],
+    control_rules: dict[str, PreviewAdvancedFilter],
+    enabled: bool = True,
+    rois: list[PreviewRoi] | None = None,
+) -> bool | None:
+    """Return True/False for a controlled detection box, otherwise None."""
+    if not enabled:
+        return None
+    if annotation_pixel_geometry(annotation, image_size) is None:
+        return None
+    if rois and not _annotation_inside_rois(annotation, rois):
+        return None
+    rule = control_rules.get(annotation.class_name)
+    if rule is None or not rule.has_annotation_constraints():
+        # A global ROI is itself a control rule: every detection inside it
+        # passes the ROI gate even when its class has no additional limits.
+        return True if rois else None
+    return _annotation_matches_advanced_filter(annotation, image_size, rule)
+
+
+def _image_control_result(
+    annotation: ImageAnnotation,
+    control_rules: dict[str, PreviewAdvancedFilter],
+    enabled: bool = True,
+    rois: list[PreviewRoi] | None = None,
+) -> bool | None:
+    """Return NG when any controlled detection box fails, OK when all pass."""
+    results = [
+        result
+        for item in annotation.annotations
+        if (
+            result := _annotation_control_result(
+                item,
+                annotation.image_size,
+                control_rules,
+                enabled,
+                rois,
+            )
+        ) is not None
+    ]
+    if not results:
+        # With a global ROI enabled, no in-ROI detection means the inspected
+        # region contains no defect and therefore passes this control gate.
+        return True if enabled and rois else None
+    return all(results)
+
+
+def _annotation_control_pen_style(
+    annotation,
+    image_size: tuple[int, int],
+    control_rules: dict[str, PreviewAdvancedFilter],
+    enabled: bool,
+    rois: list[PreviewRoi] | None = None,
+):
+    """Return solid for passing boxes and dashed for failing boxes."""
+    result = _annotation_control_result(
+        annotation,
+        image_size,
+        control_rules,
+        enabled,
+        rois,
+    )
+    if rois and not _annotation_inside_rois(annotation, rois):
+        return Qt.DashLine
+    if result is False or (result is None and not annotation.confirmed):
+        return Qt.DashLine
+    return Qt.SolidLine
+
+
 def _image_matches_annotation_filters(
     annotation: ImageAnnotation,
     class_filter: str | None,
-    advanced_filter: PreviewAdvancedFilter,
 ) -> bool:
-    """Match class/ranges against one object instead of mixing objects."""
+    """Match the ordinary class filter without treating control as filtering."""
     image_class_match = bool(
         class_filter is not None and class_filter in annotation.image_tags
     )
-    candidates = [
-        item
-        for item in annotation.annotations
-        if class_filter is None or item.class_name == class_filter
-    ]
-    if advanced_filter.has_annotation_constraints():
-        return any(
-            _annotation_matches_advanced_filter(item, advanced_filter)
-            for item in candidates
-        )
+    candidates = [item for item in annotation.annotations if item.class_name == class_filter]
     if class_filter is not None:
         return image_class_match or bool(candidates)
     return True
@@ -209,6 +332,9 @@ def _draw_annotation_overlays(
     annotation: ImageAnnotation,
     class_colors: dict[str, str],
     stroke_scale: float = 1.0,
+    control_rules: dict[str, PreviewAdvancedFilter] | None = None,
+    control_enabled: bool = False,
+    rois: list[PreviewRoi] | None = None,
 ) -> None:
     """Draw saved detect/pose annotations over an image rect."""
     painter.setRenderHint(QPainter.Antialiasing)
@@ -226,23 +352,24 @@ def _draw_annotation_overlays(
                 min(point.x() for point in polygon),
                 min(point.y() for point in polygon),
             )
-            fill = QColor(color)
-            fill.setAlpha(46)
             pen = QPen(color, line_width)
-            if not ann.confirmed:
-                pen.setStyle(Qt.DashLine)
+            pen.setStyle(_annotation_control_pen_style(
+                ann, annotation.image_size, control_rules or {}, control_enabled, rois
+            ))
             painter.setPen(pen)
-            painter.setBrush(fill)
-            painter.drawPolygon(polygon)
+            # Preview overlays keep the detection area fully transparent so
+            # image details remain unobstructed; only the outline is rendered.
             painter.setBrush(Qt.NoBrush)
+            painter.drawPolygon(polygon)
 
         if ann.bbox and not ann.polygon:
             cx, cy, w, h = ann.bbox
             x1, y1 = _norm_xy(image_rect, cx - w / 2, cy - h / 2)
             x2, y2 = _norm_xy(image_rect, cx + w / 2, cy + h / 2)
             pen = QPen(color, line_width)
-            if not ann.confirmed:
-                pen.setStyle(Qt.DashLine)
+            pen.setStyle(_annotation_control_pen_style(
+                ann, annotation.image_size, control_rules or {}, control_enabled, rois
+            ))
             painter.setPen(pen)
             painter.setBrush(Qt.NoBrush)
             painter.drawRect(QRect(int(x1), int(y1), int(x2 - x1), int(y2 - y1)))
@@ -279,6 +406,67 @@ def _draw_annotation_overlays(
                 stroke_scale,
             )
 
+    control_result = _image_control_result(
+        annotation,
+        control_rules or {},
+        control_enabled,
+        rois,
+    )
+    if control_result is not None:
+        _draw_control_badge(painter, image_rect, control_result, stroke_scale)
+
+    _draw_preview_rois(painter, image_rect, rois or [], stroke_scale)
+
+
+def _draw_preview_rois(
+    painter: QPainter,
+    image_rect: QRect,
+    rois: list[PreviewRoi],
+    stroke_scale: float = 1.0,
+) -> None:
+    """Draw session-only ROI outlines without filling the underlying image."""
+    if not rois:
+        return
+    color = QColor(PALETTE["warning"])
+    painter.setPen(QPen(color, max(2, round(2 * stroke_scale)), Qt.DashDotLine))
+    painter.setBrush(Qt.NoBrush)
+    for roi in rois:
+        if roi.shape in {"rectangle", "ellipse"} and len(roi.points) == 2:
+            start = _norm_point(image_rect, *roi.points[0])
+            end = _norm_point(image_rect, *roi.points[1])
+            rect = QRectF(start, end).normalized()
+            if roi.shape == "rectangle":
+                painter.drawRect(rect)
+            else:
+                painter.drawEllipse(rect)
+        elif roi.shape == "polygon" and len(roi.points) >= 3:
+            painter.drawPolygon(QPolygonF([
+                _norm_point(image_rect, *point) for point in roi.points
+            ]))
+
+
+def _draw_control_badge(
+    painter: QPainter,
+    image_rect: QRect,
+    passed: bool,
+    stroke_scale: float = 1.0,
+) -> None:
+    """Draw the aggregate detection-control result at the image top-left."""
+    text = "OK" if passed else "NG"
+    color = QColor(PALETTE["success"] if passed else PALETTE["danger"])
+    font = QFont()
+    font.setPixelSize(max(13, min(28, round(15 * stroke_scale ** 0.2))))
+    font.setBold(True)
+    painter.setFont(font)
+    metrics = painter.fontMetrics()
+    width = metrics.horizontalAdvance(text) + 14
+    height = metrics.height() + 6
+    rect = QRect(image_rect.left() + 4, image_rect.top() + 4, width, height)
+    background = QColor(color)
+    background.setAlpha(225)
+    painter.fillRect(rect, background)
+    painter.setPen(QColor(PALETTE["ink"]))
+    painter.drawText(rect, Qt.AlignCenter, text)
 
 def _draw_annotation_label(
     painter: QPainter,
@@ -288,7 +476,7 @@ def _draw_annotation_label(
     color: QColor,
     stroke_scale: float,
 ) -> None:
-    """Draw a readable class/area badge next to a preview annotation."""
+    """Draw class/area text with a fully transparent background."""
     if not text:
         return
     font = QFont()
@@ -315,10 +503,7 @@ def _draw_annotation_label(
         label_y = int(anchor_y)
     label_y = min(label_y, image_rect.bottom() - label_height + 1)
     label_rect = QRect(label_x, label_y, label_width, label_height)
-    background = QColor(color)
-    background.setAlpha(225)
-    painter.fillRect(label_rect, background)
-    painter.setPen(QColor(PALETTE["ink"]))
+    painter.setPen(color)
     painter.drawText(
         label_rect.adjusted(padding_x, 0, -padding_x, 0),
         Qt.AlignLeft | Qt.AlignVCenter,
@@ -354,12 +539,14 @@ class PreviewGrid(QListWidget):
         path: Path,
         annotation: ImageAnnotation,
         summary: PreviewSummary,
+        rois: list[PreviewRoi] | None = None,
     ) -> QListWidgetItem:
         item = QListWidgetItem(self)
         key = str(path)
         item.setData(_PATH_ROLE, key)
         item.setData(_ANNOTATION_ROLE, annotation)
         item.setData(_SUMMARY_ROLE, summary)
+        item.setData(_ROI_ROLE, list(rois or []))
         item.setToolTip(key)
         item.setText("")
         self._items_by_path[key] = item
@@ -392,9 +579,20 @@ class PreviewDelegate(QStyledItemDelegate):
         super().__init__(parent)
         self._grid = grid
         self._class_colors: dict[str, str] = {}
+        self._control_rules: dict[str, PreviewAdvancedFilter] = {}
+        self._control_enabled = False
 
     def set_class_colors(self, colors: dict[str, str]) -> None:
         self._class_colors = dict(colors)
+
+    def set_control_rules(
+        self,
+        rules: dict[str, PreviewAdvancedFilter],
+        enabled: bool,
+    ) -> None:
+        self._control_rules = dict(rules)
+        self._control_enabled = enabled
+        self._grid.viewport().update()
 
     def sizeHint(self, option, index):  # noqa: N802
         icon_size = self._grid.iconSize()
@@ -428,6 +626,9 @@ class PreviewDelegate(QStyledItemDelegate):
                 drawn_rect,
                 annotation,
                 self._class_colors,
+                control_rules=self._control_rules,
+                control_enabled=self._control_enabled,
+                rois=index.data(_ROI_ROLE) or [],
             )
         self._draw_label(painter, rect, index)
         painter.restore()
@@ -479,20 +680,139 @@ class DetailPreviewCanvas(QWidget):
     """Large read-only image view used by the preview dialog."""
 
     edit_requested = pyqtSignal()
+    rois_changed = pyqtSignal(object)
 
     def __init__(
         self,
         pixmap: QPixmap | None,
         annotation: ImageAnnotation,
         class_colors: dict[str, str],
+        control_rules: dict[str, PreviewAdvancedFilter] | None = None,
+        control_enabled: bool = False,
+        rois: list[PreviewRoi] | None = None,
         parent=None,
     ):
         super().__init__(parent)
         self._pixmap = pixmap
         self._annotation = annotation
         self._class_colors = dict(class_colors)
+        self._control_rules = dict(control_rules or {})
+        self._control_enabled = control_enabled
+        self._rois = list(rois or [])
+        self._roi_tool = ""
+        self._roi_drag_start: tuple[float, float] | None = None
+        self._roi_drag_current: tuple[float, float] | None = None
+        self._roi_polygon_points: list[tuple[float, float]] = []
+        self._roi_move_start: tuple[float, float] | None = None
+        self._roi_move_snapshot: PreviewRoi | None = None
         self._scale = 1.0
         self.setMinimumSize(240, 180)
+        self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.StrongFocus)
+
+    def set_roi_tool(self, tool: str) -> None:
+        self._roi_tool = tool if tool in {"rectangle", "ellipse", "polygon"} else ""
+        self._roi_drag_start = None
+        self._roi_drag_current = None
+        self._roi_polygon_points = []
+        self._roi_move_start = None
+        self._roi_move_snapshot = None
+        self.setCursor(Qt.CrossCursor if self._roi_tool else Qt.ArrowCursor)
+        self.update()
+
+    def set_rois(self, rois: list[PreviewRoi]) -> None:
+        self._rois = list(rois)
+        self.update()
+
+    def clear_rois(self) -> None:
+        if not self._rois:
+            return
+        self._rois = []
+        self.rois_changed.emit(list(self._rois))
+        self.update()
+
+    def _event_norm(self, event) -> tuple[float, float]:
+        width = max(1, self.sizeHint().width())
+        height = max(1, self.sizeHint().height())
+        return (
+            max(0.0, min(1.0, event.x() / width)),
+            max(0.0, min(1.0, event.y() / height)),
+        )
+
+    def _constrain_roi_end(
+        self,
+        start: tuple[float, float],
+        end: tuple[float, float],
+    ) -> tuple[float, float]:
+        """Constrain the ellipse tool to a true circle in displayed pixels."""
+        if self._roi_tool != "ellipse":
+            return end
+        width = max(1, self.sizeHint().width())
+        height = max(1, self.sizeHint().height())
+        dx = (end[0] - start[0]) * width
+        dy = (end[1] - start[1]) * height
+        side = min(abs(dx), abs(dy))
+        if side <= 0:
+            return start
+        constrained = (
+            start[0] + (side if dx >= 0 else -side) / width,
+            start[1] + (side if dy >= 0 else -side) / height,
+        )
+        return (
+            max(0.0, min(1.0, constrained[0])),
+            max(0.0, min(1.0, constrained[1])),
+        )
+
+    def _near_first_polygon_point(self, point: tuple[float, float]) -> bool:
+        if not self._roi_polygon_points:
+            return False
+        first = self._roi_polygon_points[0]
+        width = max(1, self.sizeHint().width())
+        height = max(1, self.sizeHint().height())
+        return (
+            ((point[0] - first[0]) * width) ** 2
+            + ((point[1] - first[1]) * height) ** 2
+            <= _ROI_CLOSE_RADIUS_PX ** 2
+        )
+
+    def _finish_roi_polygon(self) -> bool:
+        """Close the active polygon once and publish the global ROI."""
+        points = list(self._roi_polygon_points)
+        if len(points) >= 2 and self._near_first_polygon_point(points[-1]):
+            points.pop()
+        if len(points) < 3:
+            return False
+        self._rois = [PreviewRoi("polygon", tuple(points))]
+        self._roi_polygon_points = []
+        self._roi_drag_current = None
+        self.rois_changed.emit(list(self._rois))
+        self.update()
+        return True
+
+    def _cancel_roi_polygon(self) -> None:
+        self._roi_polygon_points = []
+        self._roi_drag_current = None
+        self.update()
+
+    @staticmethod
+    def _move_roi(
+        roi: PreviewRoi,
+        dx: float,
+        dy: float,
+    ) -> PreviewRoi:
+        """Translate a ROI while keeping every point inside the image."""
+        if not roi.points:
+            return roi
+        min_x = min(point[0] for point in roi.points)
+        max_x = max(point[0] for point in roi.points)
+        min_y = min(point[1] for point in roi.points)
+        max_y = max(point[1] for point in roi.points)
+        dx = max(-min_x, min(1.0 - max_x, dx))
+        dy = max(-min_y, min(1.0 - max_y, dy))
+        return PreviewRoi(
+            roi.shape,
+            tuple((x + dx, y + dy) for x, y in roi.points),
+        )
 
     def sizeHint(self):  # noqa: N802
         if self._pixmap is None or self._pixmap.isNull():
@@ -545,8 +865,161 @@ class DetailPreviewCanvas(QWidget):
             self._annotation,
             self._class_colors,
             stroke_scale=max(1.0, self._scale),
+            control_rules=self._control_rules,
+            control_enabled=self._control_enabled,
+            rois=self._rois,
         )
+        self._paint_roi_preview(painter, image_rect)
         painter.end()
+
+    def _paint_roi_preview(self, painter: QPainter, image_rect: QRect) -> None:
+        preview: list[PreviewRoi] = []
+        if self._roi_tool in {"rectangle", "ellipse"} and self._roi_drag_start and self._roi_drag_current:
+            preview.append(PreviewRoi(
+                self._roi_tool,
+                (self._roi_drag_start, self._roi_drag_current),
+            ))
+        elif self._roi_tool == "polygon" and self._roi_polygon_points:
+            points = list(self._roi_polygon_points)
+            if self._roi_drag_current is not None:
+                points.append(
+                    self._roi_polygon_points[0]
+                    if self._near_first_polygon_point(self._roi_drag_current)
+                    else self._roi_drag_current
+                )
+            if len(points) >= 2:
+                color = QColor(PALETTE["warning"])
+                painter.setPen(QPen(color, 2, Qt.DashDotLine))
+                painter.setBrush(Qt.NoBrush)
+                painter.drawPolyline(QPolygonF([
+                    _norm_point(image_rect, *point) for point in points
+                ]))
+                first = _norm_point(image_rect, *self._roi_polygon_points[0])
+                painter.setBrush(QBrush(color))
+                painter.drawEllipse(first, 5, 5)
+                return
+        _draw_preview_rois(painter, image_rect, preview, max(1.0, self._scale))
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() != Qt.LeftButton:
+            super().mousePressEvent(event)
+            return
+        point = self._event_norm(event)
+        if not self._roi_tool:
+            if self._rois and _roi_contains_point(self._rois[0], point):
+                self._roi_move_start = point
+                self._roi_move_snapshot = self._rois[0]
+                self.setCursor(Qt.ClosedHandCursor)
+                event.accept()
+                return
+            super().mousePressEvent(event)
+            return
+        if self._roi_tool in {"rectangle", "ellipse"}:
+            self._roi_drag_start = point
+            self._roi_drag_current = point
+        else:
+            if len(self._roi_polygon_points) >= 3 and self._near_first_polygon_point(point):
+                self._finish_roi_polygon()
+                event.accept()
+                return
+            self._roi_polygon_points.append(point)
+            self._roi_drag_current = point
+        self.update()
+        event.accept()
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if self._roi_move_start is not None and self._roi_move_snapshot is not None:
+            current = self._event_norm(event)
+            self._rois = [self._move_roi(
+                self._roi_move_snapshot,
+                current[0] - self._roi_move_start[0],
+                current[1] - self._roi_move_start[1],
+            )]
+            self.setCursor(Qt.ClosedHandCursor)
+            self.update()
+            event.accept()
+            return
+        if not self._roi_tool:
+            point = self._event_norm(event)
+            self.setCursor(
+                Qt.OpenHandCursor
+                if self._rois and _roi_contains_point(self._rois[0], point)
+                else Qt.ArrowCursor
+            )
+            super().mouseMoveEvent(event)
+            return
+        if (
+            self._roi_tool == "polygon"
+            or (self._roi_drag_start is not None and event.buttons() & Qt.LeftButton)
+        ):
+            current = self._event_norm(event)
+            self._roi_drag_current = (
+                self._constrain_roi_end(self._roi_drag_start, current)
+                if self._roi_drag_start is not None
+                else current
+            )
+            self.update()
+            event.accept()
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton and self._roi_move_start is not None:
+            self._roi_move_start = None
+            self._roi_move_snapshot = None
+            self.setCursor(Qt.OpenHandCursor)
+            self.rois_changed.emit(list(self._rois))
+            self.update()
+            event.accept()
+            return
+        if (
+            event.button() == Qt.LeftButton
+            and self._roi_tool in {"rectangle", "ellipse"}
+            and self._roi_drag_start is not None
+        ):
+            start = self._roi_drag_start
+            end = self._constrain_roi_end(start, self._event_norm(event))
+            if abs(end[0] - start[0]) > 0.002 and abs(end[1] - start[1]) > 0.002:
+                # The ROI is global and singular. Drawing another shape
+                # replaces the previous control region for every image.
+                self._rois = [PreviewRoi(self._roi_tool, (start, end))]
+                self.rois_changed.emit(list(self._rois))
+            self._roi_drag_start = None
+            self._roi_drag_current = None
+            self.update()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
+        if self._roi_tool == "polygon" and event.button() == Qt.LeftButton:
+            # Qt sends a normal press before the double-click event; remove the
+            # duplicate endpoint so the saved polygon does not self-overlap.
+            if len(self._roi_polygon_points) >= 2:
+                previous = self._roi_polygon_points[-2]
+                current = self._roi_polygon_points[-1]
+                width = max(1, self.sizeHint().width())
+                height = max(1, self.sizeHint().height())
+                if (
+                    ((current[0] - previous[0]) * width) ** 2
+                    + ((current[1] - previous[1]) * height) ** 2
+                    <= _ROI_CLOSE_RADIUS_PX ** 2
+                ):
+                    self._roi_polygon_points.pop()
+            self._finish_roi_polygon()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if self._roi_tool == "polygon":
+            if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+                self._finish_roi_polygon()
+                event.accept()
+                return
+            if event.key() == Qt.Key_Escape:
+                self._cancel_roi_polygon()
+                event.accept()
+                return
+        super().keyPressEvent(event)
 
     def wheelEvent(self, event) -> None:  # noqa: N802
         factor = _ZOOM_FACTOR if event.angleDelta().y() > 0 else 1.0 / _ZOOM_FACTOR
@@ -554,6 +1027,10 @@ class DetailPreviewCanvas(QWidget):
         event.accept()
 
     def contextMenuEvent(self, event) -> None:  # noqa: N802
+        if self._roi_tool == "polygon" and self._roi_polygon_points:
+            self._cancel_roi_polygon()
+            event.accept()
+            return
         menu = QMenu(self)
         edit_action = menu.addAction("编辑")
         chosen = menu.exec_(event.globalPos())
@@ -565,6 +1042,7 @@ class PreviewDetailDialog(QDialog):
     """Dialog for inspecting one image at a larger scale."""
 
     edit_requested = pyqtSignal(object)  # Path
+    rois_changed = pyqtSignal(object)  # global list[PreviewRoi]
 
     def __init__(
         self,
@@ -576,6 +1054,9 @@ class PreviewDetailDialog(QDialog):
         project: ProjectManager | None = None,
         image_paths: list[Path] | None = None,
         current_index: int = 0,
+        control_rules: dict[str, PreviewAdvancedFilter] | None = None,
+        control_enabled: bool = False,
+        rois: list[PreviewRoi] | None = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -583,6 +1064,9 @@ class PreviewDetailDialog(QDialog):
         self._image_paths = list(image_paths or [image_path])
         self._current_index = max(0, min(current_index, len(self._image_paths) - 1))
         self._class_colors = dict(class_colors)
+        self._control_rules = dict(control_rules or {})
+        self._control_enabled = control_enabled
+        self._rois = list(rois or [])
         self._current_path = image_path
         self.setWindowTitle(f"预览 - {image_path.name}")
         self.resize(1100, 760)
@@ -613,6 +1097,21 @@ class PreviewDetailDialog(QDialog):
         self._fit.clicked.connect(self._fit_to_window)
         toolbar.addWidget(self._fit)
 
+        self._roi_tool_combo = QComboBox()
+        self._roi_tool_combo.addItem("ROI：移动", "")
+        self._roi_tool_combo.addItem("ROI：矩形", "rectangle")
+        self._roi_tool_combo.addItem("ROI：圆形", "ellipse")
+        self._roi_tool_combo.addItem("ROI：多边形", "polygon")
+        self._roi_tool_combo.setToolTip(
+            "移动模式下按住 ROI 内部拖动；ROI 仅用于预览分析，不写入标注或训练数据；多边形双击完成"
+        )
+        self._roi_tool_combo.currentIndexChanged.connect(self._on_roi_tool_changed)
+        toolbar.addWidget(self._roi_tool_combo)
+
+        self._clear_roi_btn = QPushButton("清除当前 ROI")
+        set_button_role(self._clear_roi_btn, "secondary")
+        toolbar.addWidget(self._clear_roi_btn)
+
         self._title = QLabel("")
         self._title.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self._title.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -628,12 +1127,33 @@ class PreviewDetailDialog(QDialog):
             f" border: 1px solid {PALETTE['line']};"
             "}"
         )
-        self._canvas = DetailPreviewCanvas(pixmap, annotation, class_colors)
+        self._canvas = DetailPreviewCanvas(
+            pixmap,
+            annotation,
+            class_colors,
+            self._control_rules,
+            self._control_enabled,
+            self._current_rois(),
+        )
         self._canvas.edit_requested.connect(self._request_edit_current)
+        self._canvas.rois_changed.connect(self._on_canvas_rois_changed)
+        self._clear_roi_btn.clicked.connect(self._canvas.clear_rois)
         self._scroll.setWidget(self._canvas)
         layout.addWidget(self._scroll, 1)
         self._set_title(image_path, summary)
         self._fit_to_window()
+
+    def _current_rois(self) -> list[PreviewRoi]:
+        return list(self._rois)
+
+    def _on_roi_tool_changed(self, _index: int) -> None:
+        self._canvas.set_roi_tool(str(self._roi_tool_combo.currentData() or ""))
+
+    def _on_canvas_rois_changed(self, rois: list[PreviewRoi]) -> None:
+        self._rois = list(rois)
+        self._control_enabled = bool(self._control_rules or self._rois)
+        self._canvas._control_enabled = self._control_enabled
+        self.rois_changed.emit(list(rois))
 
     def _fit_to_window(self) -> None:
         pixmap = self._canvas._pixmap
@@ -669,6 +1189,7 @@ class PreviewDetailDialog(QDialog):
         summary = _summary_for_annotation(annotation, self._class_colors)
         self._current_path = path
         self._canvas.set_content(load_pixmap(path), annotation)
+        self._canvas.set_rois(self._current_rois())
         self._set_title(path, summary)
         self._fit_to_window()
 
@@ -690,28 +1211,30 @@ class PreviewDetailDialog(QDialog):
 
 
 class PreviewAdvancedFilterDialog(QDialog):
-    """Edit preview filters locally and commit them only on Apply."""
+    """Edit per-class detection-box control rules and commit on Apply."""
 
     _RANGE_ROWS = (
-        ("width", "宽度", "%", 0.0, 100.0, 1),
-        ("height", "高度", "%", 0.0, 100.0, 1),
-        ("area", "面积", "%", 0.0, 100.0, 2),
+        ("width", "宽度", " px", 0.0, 1_000_000.0, 0),
+        ("height", "高度", " px", 0.0, 1_000_000.0, 0),
+        ("area", "面积", " px²", 0.0, 1_000_000_000_000.0, 0),
         ("confidence", "置信度", "", 0.0, 1.0, 2),
-        ("center_x", "中心点 X", "%", 0.0, 100.0, 1),
-        ("center_y", "中心点 Y", "%", 0.0, 100.0, 1),
+        ("center_x", "中心点 X", " px", 0.0, 1_000_000.0, 0),
+        ("center_y", "中心点 Y", " px", 0.0, 1_000_000.0, 0),
     )
 
     def __init__(
         self,
-        current: PreviewAdvancedFilter,
-        available_tags: list[str],
+        current: dict[str, PreviewAdvancedFilter],
+        available_classes: list[str],
         annotation_filters_enabled: bool = True,
+        pixel_limits: dict[str, float] | None = None,
         parent=None,
     ):
         super().__init__(parent)
-        self.setWindowTitle("高级筛选")
+        self.setWindowTitle("标注卡控")
         self.setMinimumWidth(480)
-        self._current = current
+        self._rules = dict(current)
+        self._available_classes = list(available_classes)
         self._range_controls: dict[
             str, tuple[QCheckBox, QDoubleSpinBox, QDoubleSpinBox]
         ] = {}
@@ -719,19 +1242,29 @@ class PreviewAdvancedFilterDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
 
-        tag_group = QGroupBox("Tag")
-        tag_layout = QVBoxLayout(tag_group)
-        self._tag_filter_bar = TagFilterBar()
-        self._tag_filter_bar.set_available_tags(available_tags)
-        self._tag_filter_bar.set_filter(current.tag_filter)
-        tag_layout.addWidget(self._tag_filter_bar)
-        layout.addWidget(tag_group)
+        class_row = QHBoxLayout()
+        class_row.addWidget(QLabel("缺陷类别"))
+        self._class_combo = QComboBox()
+        self._class_combo.addItems(self._available_classes)
+        self._class_combo.currentTextChanged.connect(self._on_class_changed)
+        class_row.addWidget(self._class_combo, 1)
+        layout.addLayout(class_row)
 
-        annotation_group = QGroupBox("标注属性")
+        annotation_group = QGroupBox("检测框卡控参数")
         annotation_layout = QFormLayout(annotation_group)
         annotation_layout.setHorizontalSpacing(16)
         annotation_layout.setVerticalSpacing(8)
-        for key, label, suffix, lower, upper, decimals in self._RANGE_ROWS:
+        for key, label, suffix, lower, fallback_upper, decimals in self._RANGE_ROWS:
+            current_range = NumericRange()
+            current_upper = max(
+                current_range.minimum or lower,
+                current_range.maximum or lower,
+            )
+            upper = max(
+                fallback_upper if pixel_limits is None else pixel_limits.get(key, fallback_upper),
+                current_upper,
+                1.0,
+            )
             enabled = QCheckBox(label)
             row = QWidget()
             row_layout = QHBoxLayout(row)
@@ -749,7 +1282,6 @@ class PreviewAdvancedFilterDialog(QDialog):
             row_layout.addWidget(maximum)
             annotation_layout.addRow(enabled, row)
             self._range_controls[key] = (enabled, minimum, maximum)
-            self._restore_range(key, getattr(current, key))
             # Keep range fields editable even when the condition is inactive.
             # Editing either endpoint is itself an intent to enable the row;
             # unchecking only controls whether the range participates.
@@ -766,8 +1298,8 @@ class PreviewAdvancedFilterDialog(QDialog):
         layout.addWidget(annotation_group)
 
         hint = QLabel(
-            "宽度、高度和中心位置按图片尺寸百分比计算；面积按图片面积百分比计算。\n"
-            "一张图片中必须存在同一个标注，同时满足已启用的全部属性条件。"
+            "宽度、高度和中心位置使用原图像素坐标；面积使用原图像素面积。\n"
+            "每个检测框按所属缺陷类别分别判断：满足全部启用条件为 OK，否则为 NG。"
         )
         hint.setWordWrap(True)
         hint.setStyleSheet(f"color: {PALETTE['text_subtle']};")
@@ -783,6 +1315,10 @@ class PreviewAdvancedFilterDialog(QDialog):
         buttons.button(QDialogButtonBox.Apply).clicked.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+        self._loading_class = False
+        self._active_class = ""
+        if self._class_combo.count():
+            self._load_class(self._class_combo.currentText())
 
     @staticmethod
     def _make_spin(
@@ -802,38 +1338,61 @@ class PreviewAdvancedFilterDialog(QDialog):
 
     def _restore_range(self, key: str, value: NumericRange) -> None:
         enabled, minimum, maximum = self._range_controls[key]
-        ui_scale = 1.0 if key == "confidence" else 100.0
         lower = minimum.minimum()
         upper = maximum.maximum()
         minimum.setValue(
-            lower if value.minimum is None else value.minimum * ui_scale
+            lower if value.minimum is None else value.minimum
         )
         maximum.setValue(
-            upper if value.maximum is None else value.maximum * ui_scale
+            upper if value.maximum is None else value.maximum
         )
         enabled.setChecked(value.is_active())
 
     def _reset_all(self) -> None:
-        self._tag_filter_bar.clear()
+        self._rules.clear()
         for key, (enabled, minimum, maximum) in self._range_controls.items():
             minimum.setValue(0.0)
-            maximum.setValue(1.0 if key == "confidence" else 100.0)
+            maximum.setValue(maximum.maximum())
             # Value edits normally auto-enable a condition. Reset values first,
             # then explicitly leave every condition inactive.
             enabled.setChecked(False)
 
-    def value(self) -> PreviewAdvancedFilter:
-        values = {"tag_filter": self._tag_filter_bar.current_filter()}
+    def _controls_value(self) -> PreviewAdvancedFilter:
+        values = {}
         for key, (enabled, minimum, maximum) in self._range_controls.items():
             if not enabled.isChecked():
                 values[key] = NumericRange()
                 continue
-            ui_scale = 1.0 if key == "confidence" else 100.0
             values[key] = NumericRange(
-                minimum=minimum.value() / ui_scale,
-                maximum=maximum.value() / ui_scale,
+                minimum=minimum.value(),
+                maximum=maximum.value(),
             )
         return PreviewAdvancedFilter(**values)
+
+    def _save_active_class(self) -> None:
+        if not self._active_class or self._loading_class:
+            return
+        value = self._controls_value()
+        if value.has_annotation_constraints():
+            self._rules[self._active_class] = value
+        else:
+            self._rules.pop(self._active_class, None)
+
+    def _load_class(self, class_name: str) -> None:
+        self._loading_class = True
+        value = self._rules.get(class_name, PreviewAdvancedFilter())
+        for key in self._range_controls:
+            self._restore_range(key, getattr(value, key))
+        self._active_class = class_name
+        self._loading_class = False
+
+    def _on_class_changed(self, class_name: str) -> None:
+        self._save_active_class()
+        self._load_class(class_name)
+
+    def value(self) -> dict[str, PreviewAdvancedFilter]:
+        self._save_active_class()
+        return dict(self._rules)
 
 
 class PreviewPanel(QWidget):
@@ -849,8 +1408,15 @@ class PreviewPanel(QWidget):
         self._status_filter: str | None = None
         self._class_filter: str | None = None
         self._data_folder_filter: str | None = None
-        self._advanced_filter = PreviewAdvancedFilter()
+        self._tag_filter = TagFilter()
+        self._control_rules: dict[str, PreviewAdvancedFilter] = {}
+        self._control_enabled = False
         self._available_tags: list[str] = []
+        self._pixel_filter_limits: dict[str, float] = {}
+        # One global, preview-only ROI applies to every image. It deliberately
+        # stays outside Annotation and ProjectManager so it cannot enter labels,
+        # exports, or training.
+        self._preview_rois: list[PreviewRoi] = []
         self._loader: ThumbnailLoader | None = None
         self._init_ui()
         self._create_loader()
@@ -892,13 +1458,15 @@ class PreviewPanel(QWidget):
         self._toolbar.addWidget(QLabel(" 数据版本 "))
         self._toolbar.addWidget(self._data_folder_combo)
 
-        self._advanced_filter_btn = QPushButton("高级筛选")
-        self._advanced_filter_btn.setToolTip(
-            "按 Tag、标注宽高面积、置信度和中心点位置筛选"
-        )
-        set_button_role(self._advanced_filter_btn, "secondary")
-        self._advanced_filter_btn.clicked.connect(self._show_advanced_filters)
-        self._toolbar.addWidget(self._advanced_filter_btn)
+        self._tag_filter_bar = TagFilterBar()
+        self._tag_filter_bar.filter_changed.connect(self._on_tag_filter_changed)
+        self._toolbar.addWidget(self._tag_filter_bar)
+
+        self._control_btn = QPushButton("标注卡控（未开启）")
+        self._control_btn.setToolTip("按缺陷类别设置检测框宽高、面积、置信度和中心点卡控")
+        set_button_role(self._control_btn, "secondary")
+        self._control_btn.clicked.connect(self._show_annotation_control)
+        self._toolbar.addWidget(self._control_btn)
 
         self._toolbar.addSeparator()
         self._toolbar.addWidget(QLabel("缩略图 "))
@@ -934,8 +1502,11 @@ class PreviewPanel(QWidget):
 
     def set_project(self, project: ProjectManager) -> None:
         self._project = project
-        self._advanced_filter = PreviewAdvancedFilter()
-        self._update_advanced_filter_button()
+        self._preview_rois.clear()
+        self._tag_filter = TagFilter()
+        self._control_rules = {}
+        self._control_enabled = False
+        self._update_control_button()
         self._class_colors = {
             cls: project.config.get_class_color(cls)
             for cls in project.config.classes
@@ -946,23 +1517,14 @@ class PreviewPanel(QWidget):
         delegate = self._grid.itemDelegate()
         if isinstance(delegate, PreviewDelegate):
             delegate.set_class_colors(self._class_colors)
+            delegate.set_control_rules(self._control_rules, self._control_enabled)
         self.refresh()
 
     def set_available_tags(self, tags: list[str]) -> None:
         self._available_tags = sorted(set(tags))
-        available = set(self._available_tags)
-        tag_filter = self._advanced_filter.tag_filter
-        cleaned = TagFilter(
-            includes=tuple(tag for tag in tag_filter.includes if tag in available),
-            excludes=tuple(tag for tag in tag_filter.excludes if tag in available),
-            mode=tag_filter.mode,
-        )
-        if cleaned != tag_filter:
-            self._advanced_filter = replace(
-                self._advanced_filter,
-                tag_filter=cleaned,
-            )
-            self._update_advanced_filter_button()
+        self._tag_filter_bar.set_available_tags(self._available_tags)
+        self._tag_filter_bar.set_filter(self._tag_filter)
+        self._tag_filter = self._tag_filter_bar.current_filter()
 
     def refresh(self) -> None:
         if self._project is None:
@@ -977,16 +1539,36 @@ class PreviewPanel(QWidget):
         self._refresh_class_filter(images)
         counts = {"confirmed": 0, "pending": 0, "unlabeled": 0}
         thumb_size = self._grid.iconSize()
+        max_width = 0
+        max_height = 0
+        max_area = 0
 
         for path in images:
             annotation = self._load_preview_annotation(path)
+            image_width, image_height = annotation.image_size
+            max_width = max(max_width, image_width)
+            max_height = max(max_height, image_height)
+            max_area = max(max_area, image_width * image_height)
             summary = _summary_for_annotation(annotation, self._class_colors)
             counts[summary.status] += 1
             if not self._passes_filters(annotation, summary):
                 continue
-            self._grid.add_preview_item(path, annotation, summary)
+            self._grid.add_preview_item(
+                path,
+                annotation,
+                summary,
+                self._preview_rois,
+            )
             if self._loader is not None:
                 self._loader.enqueue(path, thumb_size)
+
+        self._pixel_filter_limits = {
+            "width": float(max_width),
+            "height": float(max_height),
+            "area": float(max_area),
+            "center_x": float(max_width),
+            "center_y": float(max_height),
+        }
 
         visible = self._grid.count()
         text = (
@@ -1059,25 +1641,43 @@ class PreviewPanel(QWidget):
         self._data_folder_filter = str(current_data) if current_data else None
         self.refresh()
 
-    def _show_advanced_filters(self) -> None:
+    def _on_tag_filter_changed(self, tag_filter) -> None:
+        self._tag_filter = tag_filter if tag_filter is not None else TagFilter()
+        self.refresh()
+
+    def _show_annotation_control(self) -> None:
         task_type = self._project.config.task_type if self._project is not None else "detect"
         dialog = PreviewAdvancedFilterDialog(
-            self._advanced_filter,
-            self._available_tags,
+            self._control_rules,
+            [
+                self._class_combo.itemText(index)
+                for index in range(1, self._class_combo.count())
+            ],
             annotation_filters_enabled=task_type != "classify",
+            pixel_limits=self._pixel_filter_limits,
             parent=self,
         )
         if dialog.exec_() != QDialog.Accepted:
             return
-        self._advanced_filter = dialog.value()
-        self._update_advanced_filter_button()
+        self._control_rules = dialog.value()
+        self._control_enabled = bool(self._control_rules or self._preview_rois)
+        self._update_control_button()
+        delegate = self._grid.itemDelegate()
+        if isinstance(delegate, PreviewDelegate):
+            delegate.set_control_rules(self._control_rules, self._control_enabled)
         self.refresh()
 
-    def _update_advanced_filter_button(self) -> None:
-        count = self._advanced_filter.active_count()
-        self._advanced_filter_btn.setText(
-            f"高级筛选 ({count})" if count else "高级筛选"
-        )
+    def _update_control_button(self) -> None:
+        if not self._control_enabled:
+            text = "标注卡控（未开启）"
+        else:
+            parts = []
+            if self._preview_rois:
+                parts.append("全局 ROI")
+            if self._control_rules:
+                parts.append(f"{len(self._control_rules)} 类参数")
+            text = f"标注卡控（已开启 · {' + '.join(parts)}）"
+        self._control_btn.setText(text)
 
     def _passes_filters(
         self,
@@ -1086,13 +1686,11 @@ class PreviewPanel(QWidget):
     ) -> bool:
         if self._status_filter is not None and summary.status != self._status_filter:
             return False
-        tag_filter = self._advanced_filter.tag_filter
-        if not tag_filter.is_empty() and not tag_filter.matches(annotation.tags):
+        if not self._tag_filter.is_empty() and not self._tag_filter.matches(annotation.tags):
             return False
         if not _image_matches_annotation_filters(
             annotation,
             self._class_filter,
-            self._advanced_filter,
         ):
             return False
         return True
@@ -1131,10 +1729,26 @@ class PreviewPanel(QWidget):
             project=self._project,
             image_paths=paths,
             current_index=current_index,
+            control_rules=self._control_rules,
+            control_enabled=self._control_enabled,
+            rois=self._preview_rois,
             parent=self,
         )
         dialog.edit_requested.connect(self.edit_requested.emit)
+        dialog.rois_changed.connect(self._on_preview_rois_changed)
         dialog.exec_()
+
+    def _on_preview_rois_changed(self, rois: list[PreviewRoi]) -> None:
+        self._preview_rois = list(rois)
+        self._control_enabled = bool(self._control_rules or self._preview_rois)
+        self._update_control_button()
+        delegate = self._grid.itemDelegate()
+        if isinstance(delegate, PreviewDelegate):
+            delegate.set_control_rules(self._control_rules, self._control_enabled)
+        for index in range(self._grid.count()):
+            item = self._grid.item(index)
+            item.setData(_ROI_ROLE, list(self._preview_rois))
+        self._grid.viewport().update()
 
     def _reset_loader(self) -> None:
         self._stop_loader()
