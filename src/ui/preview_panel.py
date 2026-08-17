@@ -8,11 +8,13 @@ from PyQt5.QtCore import Qt, QPointF, QRect, QRectF, QSize, pyqtSignal
 from PyQt5.QtGui import QBrush, QColor, QFont, QPainter, QPen, QPixmap, QPolygonF
 from PyQt5.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -20,6 +22,8 @@ from PyQt5.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMenu,
+    QMessageBox,
+    QProgressDialog,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -509,6 +513,74 @@ def _draw_annotation_label(
         Qt.AlignLeft | Qt.AlignVCenter,
         display_text,
     )
+
+
+def render_preview_pixmap(
+    pixmap: QPixmap | None,
+    annotation: ImageAnnotation,
+    class_colors: dict[str, str],
+    control_rules: dict[str, PreviewAdvancedFilter] | None = None,
+    control_enabled: bool = False,
+    rois: list[PreviewRoi] | None = None,
+) -> QPixmap | None:
+    """Render the full-resolution image with the same overlays as preview."""
+    if pixmap is None or pixmap.isNull():
+        return None
+    result = QPixmap(pixmap.size())
+    result.fill(Qt.transparent)
+    painter = QPainter(result)
+    image_rect = QRect(0, 0, pixmap.width(), pixmap.height())
+    painter.drawPixmap(image_rect, pixmap)
+    stroke_scale = max(
+        1.0,
+        min(pixmap.width() / 1000.0, pixmap.height() / 750.0),
+    )
+    _draw_annotation_overlays(
+        painter,
+        image_rect,
+        annotation,
+        class_colors,
+        stroke_scale=stroke_scale,
+        control_rules=control_rules or {},
+        control_enabled=control_enabled,
+        rois=rois or [],
+    )
+    painter.end()
+    return result
+
+
+def save_preview_image(
+    output_path: Path | str,
+    pixmap: QPixmap | None,
+    annotation: ImageAnnotation,
+    class_colors: dict[str, str],
+    control_rules: dict[str, PreviewAdvancedFilter] | None = None,
+    control_enabled: bool = False,
+    rois: list[PreviewRoi] | None = None,
+) -> bool:
+    """Save one full-resolution annotated preview as PNG."""
+    rendered = render_preview_pixmap(
+        pixmap,
+        annotation,
+        class_colors,
+        control_rules,
+        control_enabled,
+        rois,
+    )
+    if rendered is None:
+        return False
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    return rendered.save(str(output_path), "PNG")
+
+
+def _path_is_within(path: Path, parent: Path) -> bool:
+    """Return whether path resolves to parent itself or one of its children."""
+    try:
+        path.resolve().relative_to(parent.resolve())
+    except (OSError, ValueError):
+        return False
+    return True
 
 
 class PreviewGrid(QListWidget):
@@ -1112,6 +1184,12 @@ class PreviewDetailDialog(QDialog):
         set_button_role(self._clear_roi_btn, "secondary")
         toolbar.addWidget(self._clear_roi_btn)
 
+        self._export_btn = QPushButton(icon("export"), "导出当前图")
+        self._export_btn.setToolTip("导出包含标注、面积、卡控结果和 ROI 的当前预览图")
+        set_button_role(self._export_btn, "secondary")
+        self._export_btn.clicked.connect(self._export_current_preview)
+        toolbar.addWidget(self._export_btn)
+
         self._title = QLabel("")
         self._title.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self._title.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -1192,6 +1270,55 @@ class PreviewDetailDialog(QDialog):
         self._canvas.set_rois(self._current_rois())
         self._set_title(path, summary)
         self._fit_to_window()
+
+    def _export_current_preview(self) -> None:
+        default_dir = self._current_path.parent
+        if self._project is not None:
+            default_dir = self._project.project_dir / "preview_exports"
+            if _path_is_within(default_dir, self._project.image_root()):
+                default_dir = (
+                    self._project.project_dir.parent
+                    / f"{self._project.project_dir.name}_preview_exports"
+                )
+        default_path = default_dir / f"{self._current_path.stem}_preview.png"
+        output_path, _selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "导出当前预览图",
+            str(default_path),
+            "PNG 图像 (*.png)",
+        )
+        if not output_path:
+            return
+        target = Path(output_path)
+        if target.suffix.casefold() != ".png":
+            target = target.with_suffix(".png")
+        if (
+            self._project is not None
+            and _path_is_within(target, self._project.image_root())
+        ):
+            QMessageBox.warning(
+                self,
+                "导出位置无效",
+                "不能保存到项目图片目录或其子目录，否则预览图会被当成训练图片。",
+            )
+            return
+        try:
+            saved = save_preview_image(
+                target,
+                self._canvas._pixmap,
+                self._canvas._annotation,
+                self._class_colors,
+                self._control_rules,
+                self._control_enabled,
+                self._current_rois(),
+            )
+        except OSError as exc:
+            QMessageBox.warning(self, "导出失败", str(exc))
+            return
+        if not saved:
+            QMessageBox.warning(self, "导出失败", "当前预览图无法生成或保存。")
+            return
+        QMessageBox.information(self, "导出完成", f"预览图已保存：\n{target}")
 
     def keyPressEvent(self, event) -> None:  # noqa: N802
         if event.key() == Qt.Key_A and not event.modifiers():
@@ -1707,6 +1834,98 @@ class PreviewPanel(QWidget):
             Path(self._grid.item(i).data(_PATH_ROLE))
             for i in range(self._grid.count())
         ]
+
+    def export_all_previews(self) -> Path | None:
+        """Export every project image with the active preview overlays."""
+        if self._project is None:
+            QMessageBox.information(self, "无法导出", "请先打开项目。")
+            return None
+        image_paths = self._project.list_images()
+        if not image_paths:
+            QMessageBox.information(self, "无法导出", "当前项目没有图片。")
+            return None
+        selected_dir = QFileDialog.getExistingDirectory(
+            self,
+            "导出全部预览图",
+            str(self._project.project_dir),
+        )
+        if not selected_dir:
+            return None
+
+        output_root = Path(selected_dir)
+        image_root = self._project.image_root()
+        if _path_is_within(output_root, image_root):
+            QMessageBox.warning(
+                self,
+                "导出目录无效",
+                "不能导出到项目图片目录或其子目录，否则预览图会被当成训练图片。",
+            )
+            return None
+        progress = QProgressDialog(
+            "正在导出全部预览图…",
+            "取消",
+            0,
+            len(image_paths),
+            self,
+        )
+        progress.setWindowTitle("导出预览图")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        exported = 0
+        failed: list[Path] = []
+
+        for index, image_path in enumerate(image_paths, start=1):
+            progress.setLabelText(
+                f"正在导出 {index}/{len(image_paths)}：{image_path.name}"
+            )
+            progress.setValue(index - 1)
+            QApplication.processEvents()
+            if progress.wasCanceled():
+                break
+            try:
+                relative_path = image_path.resolve().relative_to(
+                    image_root.resolve()
+                )
+            except (OSError, ValueError):
+                relative_path = Path(image_path.name)
+            output_path = (
+                output_root
+                / relative_path.parent
+                / f"{relative_path.stem}_preview.png"
+            )
+            try:
+                annotation = self._load_preview_annotation(image_path)
+                saved = save_preview_image(
+                    output_path,
+                    load_pixmap(image_path),
+                    annotation,
+                    self._class_colors,
+                    self._control_rules,
+                    self._control_enabled,
+                    self._preview_rois,
+                )
+            except OSError:
+                saved = False
+            if not saved:
+                failed.append(image_path)
+            else:
+                exported += 1
+
+        canceled = progress.wasCanceled()
+        if not canceled:
+            progress.setValue(len(image_paths))
+        message = f"已导出 {exported} 张预览图。\n{output_root}"
+        if canceled:
+            message = f"导出已取消，{message}"
+        if failed:
+            message += f"\n失败 {len(failed)} 张。"
+            QMessageBox.warning(self, "导出完成（存在失败）", message)
+        else:
+            QMessageBox.information(self, "导出完成", message)
+        self.status_changed.emit(
+            f"预览图导出完成: {exported}/{len(image_paths)} | {output_root}"
+        )
+        return output_root
 
     def _open_item_preview(self, item: QListWidgetItem) -> None:
         if self._project is None:

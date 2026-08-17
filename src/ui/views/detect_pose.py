@@ -76,6 +76,7 @@ class DetectPoseView(TaskView):
         self._refreshing_data_tree = False
         self._last_data_tree_item: QTreeWidgetItem | None = None
         self._obb_tool_active = False
+        self._task_type = "detect"
 
         self._init_ui()
         self._connect_signals()
@@ -324,14 +325,16 @@ class DetectPoseView(TaskView):
         self._current_annotation = None
         self._canvas.clear()
 
-        # Show drawing tools by task_type.
-        self._btn_polygon.setVisible(project.config.task_type in {"segment", "obb"})
-        self._btn_obb.setVisible(project.config.task_type == "obb")
+        # Normalize legacy/case-variant task values before configuring tools.
+        self._task_type = str(project.config.task_type).strip().casefold()
+        is_obb = self._task_type == "obb"
+        self._btn_polygon.setVisible(self._task_type in {"segment", "obb"})
+        self._btn_obb.setVisible(is_obb)
         self._obb_tool_active = False
         self._canvas.set_polygon_point_limit(None)
-        self._canvas.set_obb_editing_enabled(project.config.task_type == "obb")
+        self._canvas.set_obb_editing_enabled(is_obb)
         self._set_tool("select")
-        self._btn_keypoint.setVisible(project.config.task_type == "pose")
+        self._btn_keypoint.setVisible(self._task_type == "pose")
 
         self._refresh_data_folder_tree()
         images = self._load_active_data_folder(select_first=True)
@@ -694,6 +697,10 @@ class DetectPoseView(TaskView):
         self._save_current()
         self._current_image_path = path
 
+        # Reassert the project tool capability whenever the canvas changes
+        # image, so clearing/reloading the canvas cannot drop the OBB menu.
+        self._canvas.set_obb_editing_enabled(self._task_type == "obb")
+
         self._canvas.set_loading(True)
         QApplication.processEvents()
         try:
@@ -897,6 +904,9 @@ class DetectPoseView(TaskView):
         if cls_name is None or cls_name == ann.class_name:
             return
 
+        old_class = ann.class_name
+        if self._apply_selected_images_class_change(old_class, cls_name):
+            return
         self._apply_annotation_class_change(ann, cls_name)
 
     def _apply_annotation_class_change(
@@ -913,8 +923,88 @@ class DetectPoseView(TaskView):
         self._canvas.update()
         self._sync_annotations_to_panel()
 
+    def _apply_selected_images_class_change(
+        self,
+        old_class: str,
+        new_class: str,
+    ) -> bool:
+        """Relabel matching annotations across the multi-image selection.
+
+        Returns ``True`` only when a multi-image selection was handled. A
+        normal single-image change keeps the precise annotation-by-ID behavior.
+        """
+        if not self._project or old_class == new_class:
+            return False
+        selected_paths = list(dict.fromkeys(self._file_list.get_selected_paths()))
+        if len(selected_paths) <= 1:
+            return False
+        if (
+            self._current_image_path is not None
+            and self._current_image_path not in selected_paths
+        ):
+            selected_paths.append(self._current_image_path)
+
+        self._save_current()
+        new_class_id = self._project.config.get_class_id(new_class)
+        changed_images = 0
+        changed_annotations = 0
+        current_changed = False
+
+        for image_path in selected_paths:
+            label_path = self._project.label_path_for(image_path)
+            image_annotation = load_annotation(label_path)
+            if image_annotation is None:
+                continue
+            old_state = image_annotation.to_dict()
+            old_snapshot = self._stats_snapshot(image_annotation.annotations)
+            changed_here = 0
+            for annotation in image_annotation.annotations:
+                if annotation.class_name != old_class:
+                    continue
+                annotation.class_name = new_class
+                annotation.class_id = new_class_id
+                changed_here += 1
+            if changed_here <= 0:
+                continue
+
+            save_annotation(image_annotation, label_path)
+            self._file_list.set_status(image_path, image_annotation.status)
+            self._file_list.set_image_classes(
+                image_path,
+                {annotation.class_name for annotation in image_annotation.annotations},
+            )
+            self._update_stats_incremental(
+                old_snapshot,
+                self._stats_snapshot(image_annotation.annotations),
+            )
+
+            key = str(image_path)
+            stack = self._undo_stacks.get(key)
+            if stack is None:
+                stack = UndoStack()
+                stack.push(old_state)
+                self._undo_stacks[key] = stack
+            else:
+                self._undo_stacks.move_to_end(key)
+            stack.push(image_annotation.to_dict())
+            while len(self._undo_stacks) > self._UNDO_MAX_IMAGES:
+                self._undo_stacks.popitem(last=False)
+
+            changed_images += 1
+            changed_annotations += changed_here
+            current_changed = current_changed or image_path == self._current_image_path
+            self.annotations_changed.emit(image_path)
+
+        if current_changed:
+            self.reload_current()
+        self.status_changed.emit(
+            f"已批量修改类别: {old_class} → {new_class}，"
+            f"{changed_images} 张图片 / {changed_annotations} 个标注"
+        )
+        return True
+
     def _on_panel_annotation_class_change(self, ann_id: str) -> None:
-        """Change only the annotation selected in the annotation list."""
+        """Change one annotation, or relabel its class across selected images."""
         if not self._project:
             return
 
@@ -932,6 +1022,8 @@ class DetectPoseView(TaskView):
         if not cls_name or cls_name == old_class:
             return
 
+        if self._apply_selected_images_class_change(old_class, cls_name):
+            return
         self._apply_annotation_class_change(ann, cls_name)
         self.status_changed.emit(f"已将当前标注从「{old_class}」修改为「{cls_name}」")
 
@@ -1330,6 +1422,8 @@ class DetectPoseView(TaskView):
             return
 
         self._save_current()
+        current_row = self._file_list.currentRow()
+        scroll_value = self._file_list.verticalScrollBar().value()
         current_in_deleted = (
             self._current_image_path is not None
             and self._current_image_path in paths
@@ -1353,7 +1447,7 @@ class DetectPoseView(TaskView):
         self._file_list.refresh_paths(remaining)
 
         if current_in_deleted and remaining:
-            self._file_list.setCurrentRow(0)
+            self._file_list.select_nearest_visible_row(current_row, scroll_value)
 
         self._refresh_project_stats()
         self.status_changed.emit(

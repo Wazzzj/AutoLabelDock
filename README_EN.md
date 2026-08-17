@@ -47,6 +47,8 @@ It turns "annotation" and "training" into a single closed loop: label a batch of
 - Detection boxes, OBBs, and segmentation polygons show class plus area percentage and pixel area on the annotation canvas and large preview; thumbnails show class plus area percentage. Bboxes use width × height, while OBB and segmentation use true polygon area.
 - Per-image undo stack (depth 50), auto-save on image switch, LRU image cache
 - File list color-coded by status (confirmed / pending / unlabeled), with drag-and-drop image import, combined status + class + tag filtering, and right-click batch operations
+- Changing a class while multiple images are checked or selected replaces matching annotations of the current old class across all selected images.
+- Deleting the current image keeps the list near the same position and focuses the next image (or the previous one at the end). Pending-box drags repaint only the canvas until mouse release to avoid panel-sync stalls.
 - The project `model_predictions/` folder is excluded from annotation image scans and folder trees, so saved inference outputs are not treated as labeling data
 
 ### 🔎 Preview and advanced filters
@@ -56,6 +58,8 @@ It turns "annotation" and "training" into a single closed loop: label a batch of
 - Width, height, and center coordinates are percentages of image dimensions; area is a percentage of image area, so one threshold works across resolutions.
 - Class and all enabled numeric constraints must match the same annotation. Editing a range automatically enables it; unchecked ranges do not participate.
 - Classification projects keep Tag filtering while object geometry filters are disabled.
+- The large-preview toolbar exports the current image as a full-resolution PNG containing boxes or contours, class and area labels, control styling, the OK/NG result, and ROI overlays.
+- **File → Export all preview images...** exports every project preview as `*_preview.png` while preserving data-version and image subdirectories. Exporting into the project image directory is blocked so rendered previews cannot be mistaken for training images.
 - Catppuccin Mocha dark theme
 
 <details>

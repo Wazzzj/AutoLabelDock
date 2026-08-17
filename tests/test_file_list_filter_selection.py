@@ -33,3 +33,27 @@ def test_filtering_unchecks_hidden_file_list_items(tmp_path):
     assert not widget.item(1).isSelected()
     assert widget.get_selected_paths() == [keep]
 
+
+def test_select_nearest_row_after_delete_preserves_list_position(tmp_path):
+    app = _app()
+    paths = [tmp_path / f"image_{index:03d}.jpg" for index in range(60)]
+    widget = FileListWidget()
+    widget.resize(240, 120)
+    widget.set_image_paths(paths)
+    widget.show()
+    app.processEvents()
+
+    widget.setCurrentRow(35)
+    scrollbar = widget.verticalScrollBar()
+    scrollbar.setValue(max(1, scrollbar.maximum() // 2))
+    scroll_before = scrollbar.value()
+
+    remaining = paths[:35] + paths[36:]
+    widget.refresh_paths(remaining)
+    selected = widget.select_nearest_visible_row(35, scroll_before)
+
+    assert selected == paths[36]
+    assert widget.currentRow() == 35
+    assert scrollbar.value() == min(scroll_before, scrollbar.maximum())
+    assert scrollbar.value() > 0
+    widget.close()

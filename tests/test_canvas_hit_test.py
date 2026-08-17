@@ -2,7 +2,9 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt5.QtGui import QColor, QImage, QPainter, QPixmap
+from PyQt5.QtCore import QEvent, QPointF, Qt
+from PyQt5.QtGui import QColor, QImage, QMouseEvent, QPainter, QPixmap
+from PyQt5.QtTest import QSignalSpy
 from PyQt5.QtWidgets import QApplication
 
 from src.core.annotation import Annotation
@@ -116,3 +118,45 @@ def test_annotation_canvas_label_background_is_fully_transparent():
     painter.end()
 
     assert image.pixelColor(20, 20) == background
+
+
+def test_dragging_pending_box_syncs_panels_only_after_mouse_release():
+    app = _app()
+    canvas = AnnotationCanvas()
+    canvas.resize(240, 160)
+    canvas.set_pixmap(QPixmap(200, 100))
+    annotation = Annotation(
+        class_name="prediction",
+        class_id=0,
+        bbox=(0.5, 0.5, 0.3, 0.3),
+        confirmed=False,
+        source="auto",
+    )
+    canvas.set_annotations([annotation])
+    canvas.show()
+    app.processEvents()
+
+    changed_spy = QSignalSpy(canvas.annotations_changed)
+    modified_spy = QSignalSpy(canvas.annotation_modified)
+    canvas._dragging = True
+    canvas._drag_type = "move"
+    canvas._drag_ann_id = annotation.id
+    canvas._drag_start_norm = (0.5, 0.5)
+    canvas._drag_ann_snapshot = annotation.to_dict()
+    canvas._handle_drag(0.6, 0.55)
+
+    assert annotation.confirmed is True
+    assert len(changed_spy) == 0
+
+    release = QMouseEvent(
+        QEvent.MouseButtonRelease,
+        QPointF(120, 100),
+        Qt.LeftButton,
+        Qt.NoButton,
+        Qt.NoModifier,
+    )
+    canvas.mouseReleaseEvent(release)
+    assert len(modified_spy) == 1
+    assert modified_spy[0][0] == annotation.id
+    assert len(changed_spy) == 0
+    canvas.close()

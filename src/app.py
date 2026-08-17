@@ -635,6 +635,10 @@ class MainWindow(QMainWindow):
         export_action.triggered.connect(self._on_export)
         file_menu.addAction(export_action)
 
+        export_previews_action = QAction(icon("export"), "导出全部预览图...", self)
+        export_previews_action.triggered.connect(self._on_export_all_previews)
+        file_menu.addAction(export_previews_action)
+
         import_action = QAction(icon("import"), "导入标注...", self)
         import_action.setShortcut("Ctrl+I")
         import_action.triggered.connect(self._on_import)
@@ -951,6 +955,14 @@ class MainWindow(QMainWindow):
                 self._status_label.setText(f"导出完成: {export_dir}")
         except (OSError, ValueError, KeyError):
             pass  # Error already shown by controller
+
+    def _on_export_all_previews(self) -> None:
+        if not self._project or self._preview_panel is None:
+            QMessageBox.information(self, "无法导出", "请先打开项目。")
+            return
+        if self._label_panel is not None:
+            self._label_panel.save_and_cleanup()
+        self._preview_panel.export_all_previews()
 
     def _on_import(self) -> None:
         if not self._project:

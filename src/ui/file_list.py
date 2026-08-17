@@ -426,6 +426,30 @@ class FileListWidget(QListWidget):
                     break
         self.verticalScrollBar().setValue(scroll_value)
 
+    def select_nearest_visible_row(
+        self,
+        preferred_row: int,
+        scroll_value: int | None = None,
+    ) -> Path | None:
+        """Select the closest visible row without resetting the viewport.
+
+        After deleting the current image, the item that followed it now
+        occupies the same row. If that row is filtered out, search forward
+        first and then backward so navigation continues near the deletion.
+        """
+        if self.count() <= 0:
+            return None
+        anchor = max(0, min(preferred_row, self.count() - 1))
+        rows = list(range(anchor, self.count())) + list(range(anchor - 1, -1, -1))
+        target_row = next((row for row in rows if not self.item(row).isHidden()), -1)
+        if target_row < 0:
+            return None
+        self.setCurrentRow(target_row)
+        if scroll_value is not None:
+            scrollbar = self.verticalScrollBar()
+            scrollbar.setValue(max(0, min(scroll_value, scrollbar.maximum())))
+        return self.get_current_path()
+
     def get_paths(self) -> list[Path]:
         """Return a copy of the current image paths list."""
         return list(self._paths)

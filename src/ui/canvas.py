@@ -1289,7 +1289,6 @@ class AnnotationCanvas(QWidget):
                         ann.keypoints[i].y = max(0, min(1, kp_dict["y"] + dy))
             if not ann.confirmed:
                 ann.confirmed = True
-            self.annotations_changed.emit()
 
         elif self._drag_type == "rotate_obb" and self._drag_ann_snapshot:
             original = self._drag_ann_snapshot.get("polygon", [])
@@ -1326,7 +1325,6 @@ class AnnotationCanvas(QWidget):
             self._sync_polygon_bbox(ann)
             if not ann.confirmed:
                 ann.confirmed = True
-            self.annotations_changed.emit()
 
         elif self._drag_type.startswith("resize_obb_") and self._drag_ann_snapshot:
             try:
@@ -1336,7 +1334,6 @@ class AnnotationCanvas(QWidget):
             self._resize_obb_corner(ann, vertex_idx, nx, ny)
             if not ann.confirmed:
                 ann.confirmed = True
-            self.annotations_changed.emit()
 
         elif self._drag_type.startswith("poly_vertex_"):
             try:
@@ -1348,7 +1345,6 @@ class AnnotationCanvas(QWidget):
                 self._sync_polygon_bbox(ann)
                 if not ann.confirmed:
                     ann.confirmed = True
-                self.annotations_changed.emit()
 
         elif self._drag_type == "move_kp":
             if 0 <= self._drag_kp_idx < len(ann.keypoints):
@@ -1356,7 +1352,6 @@ class AnnotationCanvas(QWidget):
                 ann.keypoints[self._drag_kp_idx].y = max(0.0, min(1.0, ny))
                 if not ann.confirmed:
                     ann.confirmed = True
-                self.annotations_changed.emit()
 
         elif self._drag_type.startswith("resize_") and ann.bbox and self._drag_ann_snapshot:
             orig_bbox = self._drag_ann_snapshot["bbox"]
@@ -1381,7 +1376,6 @@ class AnnotationCanvas(QWidget):
             ann.bbox = ((ox1 + ox2) / 2, (oy1 + oy2) / 2, ox2 - ox1, oy2 - oy1)
             if not ann.confirmed:
                 ann.confirmed = True
-            self.annotations_changed.emit()
 
     def _resize_obb_corner(
         self,

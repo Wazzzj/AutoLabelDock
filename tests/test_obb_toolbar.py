@@ -44,6 +44,24 @@ def test_obb_project_keeps_polygon_and_oriented_box_as_separate_tools(tmp_path):
     assert view._btn_obb.isChecked()
 
 
+def test_obb_context_menu_survives_case_variant_task_and_canvas_clear(tmp_path):
+    project = ProjectManager.create(
+        tmp_path / "obb-project-case",
+        "obb-project-case",
+        task_type="obb",
+    )
+    project.config.task_type = " OBB "
+    view = DetectPoseView(ImageCache(), OrderedDict())
+
+    view.set_project(project)
+    view._canvas.clear()
+    menu = QMenu()
+    view._canvas._add_tool_mode_actions(menu)
+
+    assert "旋转框" in [action.text() for action in menu.actions()]
+    view.close()
+
+
 def test_segment_project_only_shows_polygon_tool(tmp_path):
     project = ProjectManager.create(
         tmp_path / "segment-project",
