@@ -146,12 +146,15 @@ It turns "annotation" and "training" into a single closed loop: label a batch of
 | roLabelImg OBB (xml) | ✅ | ✅ | OBB |
 | COCO (json) | ✅ | ✅ | Detection / Pose |
 | labelme (json) | ✅ | ✅ | Detection / Pose |
+| X-AnyLabeling Detect (json) | ✅ | ✅ | Detection |
 | X-AnyLabeling OBB (json) | ✅ | ✅ | OBB |
 | iSAT (json) | ✅ | ✅ | Detection / Segmentation |
 | ImageFolder | ✅ | ✅ | Classification (folder-per-class) |
 | CSV | ✅ | ❌ | Classification |
 
 iSAT export mirrors image subdirectories under `labels/` and writes one same-stem JSON file per image with standard `info`, `objects`, pixel-space `segmentation`, `bbox`, `area`, `group`, and `layer` fields. Polygon contours are preserved; bbox-only annotations are converted to four-point polygons, and confirmed-only export is supported.
+
+For regular X-AnyLabeling object-detection annotations, use `X-AnyLabeling Detect (json)` in a `detect` project. Import accepts both two-point and four-point `shape_type: "rectangle"` shapes, converting four corners to their axis-aligned enclosing box. You may select either the JSON directory or a dataset root containing a `jsons/` subdirectory. Empty annotation files are ignored; the matching images must already be present in the project. Export writes X-AnyLabeling four-point rectangles and preserves the class, confidence, and image dimensions.
 
 OBB projects use the normalized Ultralytics format `class_id x1 y1 x2 y2 x3 y3 x4 y4`. Set the project task to `obb` before importing nine-column YOLO labels so they are not mistaken for a small pose layout. `classes.txt` accepts both one class name per line and indexed entries such as `0:label`.
 

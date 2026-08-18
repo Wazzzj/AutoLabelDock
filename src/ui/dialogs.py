@@ -402,6 +402,12 @@ class ImportDialog(QDialog):
             self._help_label.setText(
                 "roLabelImg OBB: 选择包含 .xml 旋转框标注文件的目录。"
             )
+        elif name == "X-AnyLabeling-Detect":
+            self._path_edit.setPlaceholderText("选择包含 X-AnyLabeling JSON 标注的目录")
+            self._help_label.setText(
+                "X-AnyLabeling Detect: 选择包含 .json rectangle 矩形框标注的目录；"
+                "兼容两点和四点矩形，也可以选择包含 jsons 子目录的数据集根目录。"
+            )
         elif name == "X-AnyLabeling-OBB":
             self._path_edit.setPlaceholderText("选择包含 X-AnyLabeling JSON 标注的目录")
             self._help_label.setText(

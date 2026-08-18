@@ -436,6 +436,8 @@ class ProjectController:
                 return True
             if fmt == "labelme" and (ann.bbox is not None or ann.polygon or ann.keypoints):
                 return True
+            if fmt == "X-AnyLabeling-Detect" and ann.bbox is not None:
+                return True
             if fmt in {"RoLabelImg-OBB", "X-AnyLabeling-OBB"} and (
                 len(ann.polygon) == 4
                 or (ann.bbox is not None and not ann.polygon)
@@ -610,6 +612,7 @@ class ProjectController:
         from src.core.formats.labelme import import_labelme
         from src.core.formats.isat import import_isat
         from src.core.formats.voc_obb import import_voc_obb
+        from src.core.formats.xanylabeling_detect import import_xanylabeling_detect
         from src.core.formats.xanylabeling_obb import import_xanylabeling_obb
 
         registry = get_import_registry()
@@ -637,6 +640,10 @@ class ProjectController:
             return import_coco(p, classes=classes or None)
         elif fmt == "labelme":
             return import_labelme(p)
+        elif fmt == "X-AnyLabeling-Detect":
+            if (task_type or "").strip().casefold() != "detect":
+                raise ValueError("X-AnyLabeling Detect 导入仅适用于 detect 项目")
+            return import_xanylabeling_detect(p)
         elif fmt == "iSAT":
             return import_isat(p)
         elif fmt == "VOC-OBB":

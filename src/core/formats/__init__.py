@@ -174,6 +174,10 @@ def _register_builtin_formats() -> None:
         export_xanylabeling_obb,
         import_xanylabeling_obb,
     )
+    from src.core.formats.xanylabeling_detect import (
+        export_xanylabeling_detect,
+        import_xanylabeling_detect,
+    )
     from src.core.formats.imagefolder import (
         ImageFolderImporter,
         export_imagefolder,
@@ -189,6 +193,14 @@ def _register_builtin_formats() -> None:
     )
     _registry.register("COCO", "COCO (json)", export_coco, needs_classes=True, output_is_file=True)
     _registry.register("labelme", "labelme (json)", export_labelme, needs_classes=False)
+    _registry.register(
+        "X-AnyLabeling-Detect",
+        "X-AnyLabeling Detect (json)",
+        export_xanylabeling_detect,
+        needs_classes=False,
+        needs_task_type=True,
+        task_types={"detect"},
+    )
     _registry.register("iSAT", "iSAT (json)", export_isat, needs_classes=False)
     _registry.register(
         "RoLabelImg-OBB",
@@ -225,6 +237,12 @@ def _register_builtin_formats() -> None:
     )
     _import_registry.register(
         "labelme", "labelme (json)", import_labelme,
+        input_is_file=False,
+    )
+    _import_registry.register(
+        "X-AnyLabeling-Detect",
+        "X-AnyLabeling Detect (json)",
+        import_xanylabeling_detect,
         input_is_file=False,
     )
     _import_registry.register(
