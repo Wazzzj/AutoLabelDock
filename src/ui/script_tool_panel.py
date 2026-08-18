@@ -31,7 +31,7 @@ from src.ui.theme import set_button_role, text_style
 _DEFAULT_SCRIPT = """# 在这里编写你的 Python 脚本\nprint('Hello AutoLabel!')\n"""
 _DEFAULT_TOOLS_DIR = Path.home() / ".autolabel" / "tools"
 _BUILTIN_CROP_FILENAME = "内置_按标注框裁剪图片.py"
-_BUILTIN_CROP_VERSION = "autolabel_crop_script_v2"
+_BUILTIN_CROP_VERSION = "autolabel_crop_script_v3"
 
 _CROP_BY_BBOX_SCRIPT = '''"""按标注框裁剪图片（AutoLabel Dock 内置脚本）
 
@@ -42,7 +42,7 @@ _CROP_BY_BBOX_SCRIPT = '''"""按标注框裁剪图片（AutoLabel Dock 内置脚
 """
 from __future__ import annotations
 
-# autolabel_crop_script_v2
+# autolabel_crop_script_v3
 
 import json
 import os
@@ -80,12 +80,29 @@ def bbox_to_xyxy(bbox: list[float] | tuple[float, float, float, float], width: i
     return x1, y1, x2, y2
 
 
-def collect_images(scan_root: Path) -> list[Path]:
+def is_excluded_path(path: Path, root: Path, excluded_folders: set[str]) -> bool:
+    try:
+        relative_folder = path.relative_to(root).parent.as_posix().strip("/")
+    except ValueError:
+        return False
+    return any(
+        relative_folder == folder or relative_folder.startswith(folder + "/")
+        for folder in excluded_folders
+    )
+
+
+def collect_images(
+    scan_root: Path,
+    image_root: Path,
+    excluded_folders: set[str],
+) -> list[Path]:
     result: list[Path] = []
     for path in scan_root.rglob("*"):
         if not path.is_file() or path.suffix.lower() not in IMAGE_EXTENSIONS:
             continue
         if any(part.casefold() in IGNORED_DIRS for part in path.parts):
+            continue
+        if is_excluded_path(path, image_root, excluded_folders):
             continue
         result.append(path)
     return sorted(result)
@@ -171,6 +188,21 @@ def main() -> None:
     if not label_dir.is_absolute():
         label_dir = PROJECT_DIR / label_dir
 
+    excluded_values = config.get("excluded_data_folders", [])
+    if not isinstance(excluded_values, list):
+        excluded_values = []
+    excluded_folders = {
+        str(folder).replace("\\\\", "/").strip("/")
+        for folder in excluded_values
+        if str(folder).strip("/\\\\")
+    }
+    if DATA_VERSION and any(
+        DATA_VERSION == folder or DATA_VERSION.startswith(folder + "/")
+        for folder in excluded_folders
+    ):
+        print(f"数据版本已解除索引: {DATA_VERSION}")
+        return
+
     image_scan_root = image_dir / DATA_VERSION if DATA_VERSION else image_dir
     label_scan_root = label_dir / DATA_VERSION if DATA_VERSION else label_dir
     output_dir = PROJECT_DIR / "crops"
@@ -185,14 +217,18 @@ def main() -> None:
         return
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    images = collect_images(image_scan_root)
+    images = collect_images(image_scan_root, image_dir, excluded_folders)
     image_by_name: dict[str, list[Path]] = {}
     images_by_stem: dict[str, list[Path]] = {}
     for image_path in images:
         image_by_name.setdefault(image_path.name, []).append(image_path)
         images_by_stem.setdefault(image_path.stem, []).append(image_path)
 
-    label_files = sorted(label_scan_root.rglob("*.json"))
+    label_files = sorted(
+        path
+        for path in label_scan_root.rglob("*.json")
+        if not is_excluded_path(path, label_dir, excluded_folders)
+    )
 
     print(f"数据版本: {DATA_VERSION or '全部数据'}")
     print(f"图片数量: {len(images)}")
@@ -677,8 +713,23 @@ class ScriptToolPanel(QWidget):
             if not isinstance(config, dict):
                 config = {}
 
+            excluded_values = config.get("excluded_data_folders", [])
+            if not isinstance(excluded_values, list):
+                excluded_values = []
+            excluded_folders = {
+                self._normalize_data_folder(folder)
+                for folder in excluded_values
+                if self._normalize_data_folder(folder)
+            }
+
+            def is_excluded(folder: str) -> bool:
+                return any(
+                    folder == excluded or folder.startswith(excluded + "/")
+                    for excluded in excluded_folders
+                )
+
             active_folder = self._normalize_data_folder(config.get("active_data_folder", ""))
-            if active_folder:
+            if active_folder and not is_excluded(active_folder):
                 folders.add(active_folder)
 
             data_folders = config.get("data_folders", [])
@@ -686,7 +737,7 @@ class ScriptToolPanel(QWidget):
                 data_folders = []
             for folder in data_folders:
                 normalized = self._normalize_data_folder(folder)
-                if normalized:
+                if normalized and not is_excluded(normalized):
                     folders.add(normalized)
 
             image_dir = Path(config.get("image_dir", "images"))
@@ -701,7 +752,7 @@ class ScriptToolPanel(QWidget):
                     except ValueError:
                         continue
                     normalized = self._normalize_data_folder(rel)
-                    if normalized:
+                    if normalized and not is_excluded(normalized):
                         folders.add(normalized)
 
         for folder in sorted(folders, key=lambda value: (value.count("/"), value.lower())):

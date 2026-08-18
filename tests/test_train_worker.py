@@ -1,4 +1,5 @@
 import sys
+import json
 
 from PyQt5.QtCore import QCoreApplication
 
@@ -100,3 +101,36 @@ def test_train_worker_recovers_completed_model_after_native_child_exit(tmp_path)
     _APP.processEvents()
 
     assert events == [("finished", {"epoch": 1.0, "mAP50": 0.75})]
+
+
+class _EventFileWorker(TrainWorker):
+    def _build_training_command(self, config_path, cancel_path):
+        event = json.dumps({"type": "finished", "payload": {"metric": 0.9}})
+        code = (
+            "from pathlib import Path; "
+            f"Path({str(self._event_path)!r}).write_text("
+            f"{'AUTOLABEL_EVENT' + chr(9) + event + chr(10)!r}, encoding='utf-8')"
+        )
+        return [sys.executable, "-s", "-c", code]
+
+
+def test_train_worker_reads_events_without_child_stdout(tmp_path):
+    config = TrainConfig(
+        data_yaml="data.yaml",
+        model="model.pt",
+        task="detect",
+        project=str(tmp_path),
+        name="run",
+    )
+    best_path = tmp_path / "run" / "weights" / "best.pt"
+    best_path.parent.mkdir(parents=True)
+    best_path.write_bytes(b"model")
+    worker = _EventFileWorker(config)
+    events = []
+    worker.finished_ok.connect(lambda metrics: events.append(("finished", metrics)))
+
+    worker.start()
+    assert worker.wait(10000)
+    _APP.processEvents()
+
+    assert events == [("finished", {"metric": 0.9})]

@@ -46,3 +46,43 @@ def test_data_version_import_has_no_small_dataset_limit(tmp_path):
     assert len(imported) == expected_count
     assert skipped == []
     assert len(project.list_images(data_folder="bulk")) == expected_count
+
+
+def test_delete_data_version_only_removes_persistent_index(tmp_path):
+    project = ProjectManager.create(tmp_path / "project", "demo")
+    project.create_data_folder("version_a")
+    image = project.image_root() / "version_a" / "sample.jpg"
+    image.write_bytes(b"image")
+    label = project.label_path_for(image)
+    label.parent.mkdir(parents=True, exist_ok=True)
+    label.write_text('{"annotations": []}', encoding="utf-8")
+    project.config.active_data_folder = "version_a"
+
+    project.delete_data_folder("version_a")
+    project.save()
+
+    assert image.read_bytes() == b"image"
+    assert label.exists()
+    assert project.config.active_data_folder == ""
+    assert "version_a" not in project.list_data_folders()
+    assert image not in project.list_images()
+
+    reopened = ProjectManager.open(project.project_dir)
+    assert "version_a" not in reopened.list_data_folders()
+    assert reopened.list_images(data_folder="version_a") == []
+    assert reopened.list_images() == []
+
+
+def test_creating_removed_data_version_restores_its_index(tmp_path):
+    project = ProjectManager.create(tmp_path / "project", "demo")
+    project.create_data_folder("version_a")
+    image = project.image_root() / "version_a" / "sample.jpg"
+    image.write_bytes(b"image")
+    project.delete_data_folder("version_a")
+
+    project.create_data_folder("version_a")
+
+    assert "version_a" in project.list_data_folders()
+    assert "version_a" not in project.config.excluded_data_folders
+    assert project.list_images(data_folder="version_a") == [image]
+    assert image in project.list_images()

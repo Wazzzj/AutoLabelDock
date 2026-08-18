@@ -572,21 +572,18 @@ class DetectPoseView(TaskView):
         reply = QMessageBox.question(
             self,
             "删除数据版本",
-            f"确定删除空文件夹「{folder}」吗？\n非空文件夹不会被删除。",
+            f"确定从程序中移除数据版本「{folder}」吗？\n"
+            "该目录下的图片也会解除程序索引，图片和标注等原始文件仍保留在磁盘中。",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
         if reply != QMessageBox.Yes:
             return
-        try:
-            self._project.delete_data_folder(folder)
-        except OSError as exc:
-            QMessageBox.warning(self, "删除数据版本失败", "请先清空该文件夹。")
-            return
+        self._project.delete_data_folder(folder)
         self._project.save()
         self._refresh_data_folder_tree()
         self._load_active_data_folder(select_first=True)
-        self.status_changed.emit(f"已删除数据版本: {folder}")
+        self.status_changed.emit(f"已解除数据版本及其图片索引，原文件已保留: {folder}")
 
     def set_filter(self, status: str | None) -> None:
         self._file_list.set_filter(status)

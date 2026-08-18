@@ -187,7 +187,9 @@ class WelcomePage(QWidget):
         recent_layout.setContentsMargins(16, 14, 16, 16)
         recent_layout.setSpacing(12)
 
-        recent_header = QHBoxLayout()
+        recent_header_widget = QWidget()
+        recent_header_widget.setFixedHeight(30)
+        recent_header = QHBoxLayout(recent_header_widget)
         recent_header.setContentsMargins(0, 0, 0, 0)
         recent_header.setSpacing(12)
 
@@ -200,7 +202,7 @@ class WelcomePage(QWidget):
         self._recent_count_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self._recent_count_label.setStyleSheet(text_style("hint"))
         recent_header.addWidget(self._recent_count_label)
-        recent_layout.addLayout(recent_header)
+        recent_layout.addWidget(recent_header_widget)
 
         self._search_edit = QLineEdit()
         self._search_edit.setClearButtonEnabled(True)
@@ -240,6 +242,8 @@ class WelcomePage(QWidget):
 
         self._empty_label = QLabel("暂无最近项目")
         self._empty_label.setAlignment(Qt.AlignCenter)
+        self._empty_label.setMinimumHeight(110)
+        self._empty_label.setMaximumHeight(140)
         self._empty_label.setStyleSheet(
             f"color: {PALETTE['text_subtle']};"
             f" background-color: {PALETTE['panel_alt']};"
@@ -247,7 +251,7 @@ class WelcomePage(QWidget):
             " border-radius: 8px;"
             " padding: 24px;"
         )
-        recent_layout.addWidget(self._empty_label)
+        recent_layout.addWidget(self._empty_label, 0, Qt.AlignTop)
 
         self.refresh_recent_projects()
         layout.addWidget(recent_panel, 1)
@@ -259,9 +263,15 @@ class WelcomePage(QWidget):
         if current is not None:
             selected_path = current.text()
 
+        total_count = len(self._config.recent_projects)
         query = ""
         if hasattr(self, "_search_edit"):
             query = self._search_edit.text().strip().lower()
+            if total_count == 0 and query:
+                self._search_edit.blockSignals(True)
+                self._search_edit.clear()
+                self._search_edit.blockSignals(False)
+                query = ""
 
         self.recent_list.clear()
         visible_count = 0
@@ -286,7 +296,6 @@ class WelcomePage(QWidget):
             self.recent_list.setCurrentRow(0)
         self._update_recent_summary()
 
-        total_count = len(self._config.recent_projects)
         if hasattr(self, "_recent_count_label"):
             if query:
                 self._recent_count_label.setText(f"{visible_count} / {total_count}")
@@ -296,6 +305,8 @@ class WelcomePage(QWidget):
             self._empty_label.setText("没有匹配项目" if query else "暂无最近项目")
             self._empty_label.setVisible(visible_count == 0)
             self.recent_list.setVisible(visible_count > 0)
+        if hasattr(self, "_search_edit"):
+            self._search_edit.setVisible(total_count > 0)
 
     def _read_recent_project_info(self, project_path: str) -> dict[str, str]:
         pm = None
@@ -630,7 +641,7 @@ class MainWindow(QMainWindow):
 
         file_menu.addSeparator()
 
-        export_action = QAction(icon("export"), "导出...", self)
+        export_action = QAction(icon("export"), "导出标注...", self)
         export_action.setShortcut("Ctrl+E")
         export_action.triggered.connect(self._on_export)
         file_menu.addAction(export_action)

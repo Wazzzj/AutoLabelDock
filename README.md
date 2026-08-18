@@ -62,13 +62,14 @@ AutoLabel Dock 是一个基于 **PyQt5 + Ultralytics YOLO** 的桌面端图像�
 - 预览大图工具栏可将当前图片导出为原始分辨率 PNG；图片包含检测框或轮廓、类别、面积、卡控样式、OK / NG 结果和 ROI。
 - 主界面“文件 → 导出全部预览图...”可批量导出项目全部预览图，输出文件以 `_preview.png` 结尾并保留数据版本及图片子目录结构。为避免污染训练集，不能导出到项目图片目录或其子目录。
 
-### 数据文件夹
+### 数据版本
 
-项目图片目录下可以维护多个数据文件夹，用来组织不同批次、版本或子集。
+项目图片目录下可以维护多个数据版本，用来组织不同批次、版本或子集。
 
-- 在标注界面创建、重命名、删除空数据文件夹。
-- 向指定数据文件夹添加图片或图片目录。
-- 在数据文件夹之间移动图片时，会同步移动镜像的标签 JSON。
+- 在标注界面创建、重命名或移除数据版本。
+- 移除数据版本时无需清空目录：版本及其目录下图片会从程序索引解除，磁盘上的图片、标注和目录均保留；重新创建同名版本即可恢复索引。
+- 向指定数据版本添加图片或图片目录。
+- 在数据版本之间移动图片时，会同步移动镜像的标签 JSON。
 - 训练界面可选择“全部版本”或指定数据版本，并与状态、类别、Tag 条件组合，只使用命中的图片构建训练集。
 - 批量自动标注按当前可见图片或当前项目范围工作。
 - `model_predictions/` 是模型面板目录推理结果目录，会从标注页图片扫描和数据文件夹树中排除。
@@ -118,7 +119,7 @@ AutoLabel Dock 是一个基于 **PyQt5 + Ultralytics YOLO** 的桌面端图像�
 | 格式 | 导出 | 导入 | 适用任务 |
 |:---|:---:|:---:|:---|
 | YOLO txt | 支持 | 支持 | 检测 / 分割 / 旋转框 / 姿态 |
-| VOC OBB xml | 不支持 | 支持 | 旋转框 |
+| roLabelImg OBB xml | 支持 | 支持 | 旋转框 |
 | COCO json | 支持 | 支持 | 检测 / 分割 / 姿态 |
 | labelme json | 支持 | 支持 | 检测 / 分割 / 姿态 |
 | X-AnyLabeling OBB json | 支持 | 支持 | 旋转框 |
@@ -128,9 +129,9 @@ AutoLabel Dock 是一个基于 **PyQt5 + Ultralytics YOLO** 的桌面端图像�
 
 iSAT 导出会在 `labels/` 下按图片子目录生成同名 JSON，写入标准 `info`、`objects`、像素级 `segmentation`、`bbox`、`area`、`group` 和 `layer` 字段。多边形会保留真实轮廓；只有矩形框的标注会转换为四点多边形，同时支持“仅导出已确认标注”。
 
-OBB 项目导入和训练使用 Ultralytics YOLO OBB 的归一化四点格式：`class_id x1 y1 x2 y2 x3 y3 x4 y4`。导入 9 列 YOLO 标签前应先将项目类型设为 `obb`，避免与少量关键点 pose 数据产生格式歧义。`classes.txt` 同时兼容每行一个类别和 `0:label` 形式。VOC OBB 导入支持 `robndbox` 的 `cx`、`cy`、`w`、`h`、`angle` 字段，其中角度按弧度解析。
+OBB 项目导入和训练使用 Ultralytics YOLO OBB 的归一化四点格式：`class_id x1 y1 x2 y2 x3 y3 x4 y4`。导入 9 列 YOLO 标签前应先将项目类型设为 `obb`，避免与少量关键点 pose 数据产生格式歧义。`classes.txt` 同时兼容每行一个类别和 `0:label` 形式。
 
-OBB 项目可导出 X-AnyLabeling 风格 JSON：每个旋转框写为四个像素坐标点、`shape_type: "rotation"` 和 `direction` 弧度角，并保留图片子目录结构。Labelme / X-AnyLabeling JSON 中使用该结构保存的旋转框，也会作为四点 OBB 导入；图片与 JSON 需要同名，并分别位于项目配置对应的 `images/` 和 `labels/` 目录。
+OBB 导入和导出明确拆分为两种格式：roLabelImg XML 使用 `robndbox` 的 `cx`、`cy`、`w`、`h`、`angle` 字段，角度按弧度处理；X-AnyLabeling JSON 使用四个像素坐标点、`shape_type: "rotation"` 和 `direction` 弧度角。两种格式均保留图片子目录结构；图片与标注文件需要同名。
 
 OBB 标注可按 `O` 或在画布右键菜单选择“旋转框”，按住鼠标左键直接拖出矩形。创建后选中旋转框，拖动框外的圆形旋转手柄可绕中心整体旋转；拖动四角可像普通矩形框一样缩放，并始终保持矩形形状。
 
@@ -374,13 +375,13 @@ Windows 下如遇到中文输出乱码，优先使用 Windows Terminal / PowerSh
 
 ## 模型权重
 
-仓库中可能放有开发测试用的 YOLO 权重文件，但项目逻辑不依赖固定权重。你可以：
+随程序打包的 YOLO 预训练权重统一存放在 `pretrained_models/` 目录。你可以：
 
 - 使用 Ultralytics 官方预训练模型，例如 `yolov8n.pt`、`yolo11n.pt`、`yolo11n-seg.pt` 等。
 - 在模型面板导入外部 `.pt` 文件。
 - 训练完成后直接使用自动注册的新模型。
 
-如果 Ultralytics 自动下载失败，可以手动下载对应 `.pt` 文件并放到仓库根目录或通过模型面板导入。
+如果 Ultralytics 自动下载失败，可以手动下载对应 `.pt` 文件并放到 `pretrained_models/` 目录或通过模型面板导入。
 
 ---
 
@@ -433,6 +434,8 @@ Windows 建议开启“开发者模式”，或尽量把项目目录和图片目
 ```text
 autolabel-dock/
 ├── config/                  全局配置、静态资源索引、训练模板
+├── icon/                    运行时 SVG 与 Windows EXE 图标
+├── pretrained_models/       随程序打包的 YOLO 预训练权重
 ├── resources/screenshots/   README 截图资源
 ├── src/
 │   ├── app.py               主窗口和整体编排
@@ -442,6 +445,7 @@ autolabel-dock/
 │   ├── ui/                  PyQt5 组件、画布、面板、对话框、视图
 │   └── utils/               图片缓存、后台线程、文件链接、日志、撤销栈
 ├── main.py                  应用入口
+├── PyInstaller.txt          Windows 打包命令
 ├── pyproject.toml           项目元数据和可选依赖
 ├── requirements.txt         基础依赖
 └── LICENSE                  AGPL-3.0 许可证
@@ -453,10 +457,13 @@ autolabel-dock/
 
 仓库包含 `PyInstaller.txt`，可作为 PyInstaller 打包参考。打包时需要注意：
 
-- PyQt5 插件和图标资源需要被正确收集。
+- 命令使用 `--windowed --onedir --contents-directory "lib"`，输出为 `dist/AutoLabelDock/AutoLabelDock.exe` 和独立的 `lib/` 依赖目录，启动及训练时不会显示控制台窗口。
+- `icon/logo.ico` 用作 Windows EXE 图标，`icon/`、`logoicon/` 和其他运行时资源会一并进入 `lib/`。
+- `pretrained_models/` 中的检测、分类、OBB 和分割权重会完整复制到 `lib/pretrained_models/`；程序会优先解析这里的同名权重。
 - 建议使用实际安装 Ultralytics 的 Python 环境执行 `python -m PyInstaller`，避免命令行调用到另一套 Python。
 - 不要使用 `--collect-all ultralytics` 强制收集所有可选模块，否则可能把目标跟踪依赖 `lap` 一并引入并在运行时触发自动安装；常规检测、分割、OBB、姿态和分类由 PyInstaller 的 Ultralytics hook 收集即可。
 - Ultralytics、torch 等训练依赖体积较大，建议按实际发布目标裁剪；如果确实需要多目标跟踪，应在打包环境预先安装 `lap>=0.5.12`。
+- 无控制台构建下，训练子进程通过临时事件文件回传进度、完成状态和错误，不依赖标准输出。
 - LocateAnything 可选依赖不建议默认打入基础包。
 
 ---

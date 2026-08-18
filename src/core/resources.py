@@ -11,6 +11,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 APP_ROOT = Path(__file__).resolve().parents[2]
+PRETRAINED_MODEL_DIR = APP_ROOT / "pretrained_models"
 
 STATIC_RESOURCE_CONFIG_PATH = APP_ROOT / "config" / "static_resources.json"
 _MISSING_RESOURCE = APP_ROOT / "__missing_resource__"
@@ -86,3 +87,20 @@ SCREENSHOTS = {
 def stylesheet_url(path: Path) -> str:
     """Return a path string suitable for Qt stylesheet url(...)."""
     return path.as_posix()
+
+
+def resolve_pretrained_model_path(value: str | Path) -> Path:
+    """Resolve bundled/repository pretrained weights without blocking downloads."""
+    path = Path(value).expanduser()
+    if path.is_absolute() or path.exists():
+        return path
+
+    candidates: list[Path] = []
+    if path.parent == Path("."):
+        candidates.append(PRETRAINED_MODEL_DIR / path.name)
+    else:
+        candidates.append(APP_ROOT / path)
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return path

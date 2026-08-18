@@ -1,7 +1,9 @@
 import json
 
 from src.core.annotation import Annotation, ImageAnnotation
+from src.core.formats import get_import_registry
 from src.core.formats.labelme import export_labelme, import_labelme_file
+from src.core.formats.xanylabeling_obb import import_xanylabeling_obb
 
 
 def test_labelme_export_writes_valid_relative_image_path_and_polygon(tmp_path):
@@ -111,3 +113,17 @@ def test_labelme_import_reads_x_anylabeling_rotation_as_obb_polygon(tmp_path):
         (0.2, 0.875),
     ]
     assert annotation.bbox == (0.5, 0.5, 0.8, 0.75)
+
+    xany_imported = import_xanylabeling_obb(tmp_path)
+    assert len(xany_imported) == 1
+    assert xany_imported[0].annotations[0].polygon == annotation.polygon
+
+
+def test_obb_import_formats_are_split_in_registry():
+    registry = get_import_registry()
+
+    assert registry.get("VOC-OBB").label == "roLabelImg OBB (xml)"
+    assert (
+        registry.get("X-AnyLabeling-OBB").label
+        == "X-AnyLabeling OBB (json)"
+    )

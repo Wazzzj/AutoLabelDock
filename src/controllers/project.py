@@ -436,7 +436,7 @@ class ProjectController:
                 return True
             if fmt == "labelme" and (ann.bbox is not None or ann.polygon or ann.keypoints):
                 return True
-            if fmt == "X-AnyLabeling-OBB" and (
+            if fmt in {"RoLabelImg-OBB", "X-AnyLabeling-OBB"} and (
                 len(ann.polygon) == 4
                 or (ann.bbox is not None and not ann.polygon)
             ):
@@ -610,6 +610,7 @@ class ProjectController:
         from src.core.formats.labelme import import_labelme
         from src.core.formats.isat import import_isat
         from src.core.formats.voc_obb import import_voc_obb
+        from src.core.formats.xanylabeling_obb import import_xanylabeling_obb
 
         registry = get_import_registry()
         info = registry.get(fmt)
@@ -640,6 +641,8 @@ class ProjectController:
             return import_isat(p)
         elif fmt == "VOC-OBB":
             return import_voc_obb(p, classes=classes or None)
+        elif fmt == "X-AnyLabeling-OBB":
+            return import_xanylabeling_obb(p)
         else:
             raise ValueError(f"未实现的导入格式: {fmt}")
 

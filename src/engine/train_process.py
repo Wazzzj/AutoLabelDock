@@ -24,18 +24,37 @@ def _json_default(value):
         return str(value)
 
 
-def _emit(event_type: str, payload=None) -> None:
+def _emit(event_type: str, payload=None, event_path: Path | None = None) -> None:
     message = {"type": event_type, "payload": payload}
-    print(
-        EVENT_PREFIX + json.dumps(message, ensure_ascii=False, default=_json_default),
-        flush=True,
+    line = EVENT_PREFIX + json.dumps(
+        message,
+        ensure_ascii=False,
+        default=_json_default,
     )
+    if event_path is not None:
+        with event_path.open("a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+            handle.flush()
+        return
+    if sys.stdout is not None:
+        print(line, flush=True)
 
 
-def run_training(config_path: Path, cancel_path: Path) -> int:
+def run_training(
+    config_path: Path,
+    cancel_path: Path,
+    event_path: Path | None = None,
+) -> int:
     disable_user_site_packages()
     configure_headless_matplotlib()
-    logging.basicConfig(level=logging.INFO)
+    if event_path is not None:
+        logging.basicConfig(
+            filename=event_path.with_suffix(".log"),
+            encoding="utf-8",
+            level=logging.INFO,
+        )
+    else:
+        logging.basicConfig(level=logging.INFO)
 
     data = json.loads(config_path.read_text(encoding="utf-8"))
     config = TrainConfig(**data)
@@ -51,15 +70,18 @@ def run_training(config_path: Path, cancel_path: Path) -> int:
     monitor = threading.Thread(target=monitor_cancel, daemon=True)
     monitor.start()
     try:
-        trainer.train(config, on_epoch_end=lambda metrics: _emit("epoch", metrics))
+        trainer.train(
+            config,
+            on_epoch_end=lambda metrics: _emit("epoch", metrics, event_path),
+        )
         if trainer.cancelled:
-            _emit("cancelled")
+            _emit("cancelled", event_path=event_path)
         else:
-            _emit("finished", trainer.get_best_metrics())
+            _emit("finished", trainer.get_best_metrics(), event_path)
         return 0
     except Exception as exc:
         logging.exception("Isolated training failed")
-        _emit("error", str(exc))
+        _emit("error", str(exc), event_path)
         return 1
     finally:
         monitor_stop.set()
@@ -68,10 +90,16 @@ def run_training(config_path: Path, cancel_path: Path) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
-    if len(args) != 2:
-        print("usage: python -m src.engine.train_process CONFIG CANCEL_FILE", file=sys.stderr)
+    if len(args) not in {2, 3}:
+        if sys.stderr is not None:
+            print(
+                "usage: python -m src.engine.train_process "
+                "CONFIG CANCEL_FILE [EVENT_FILE]",
+                file=sys.stderr,
+            )
         return 2
-    return run_training(Path(args[0]), Path(args[1]))
+    event_path = Path(args[2]) if len(args) == 3 else None
+    return run_training(Path(args[0]), Path(args[1]), event_path)
 
 
 if __name__ == "__main__":

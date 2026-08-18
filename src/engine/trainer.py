@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from typing import Callable
 
 from src.engine.backends.base import DEFAULT_BACKEND_ID
+from src.core.resources import resolve_pretrained_model_path
 
 logger = logging.getLogger(__name__)
 
@@ -222,7 +223,8 @@ class Trainer:
     ) -> None:
         """Start training."""
         logger.info("Starting training: model=%s, task=%s, epochs=%d", config.model, config.task, config.epochs)
-        self._model = self._yolo_cls(config.model, task=config.task)
+        model_path = resolve_pretrained_model_path(config.model)
+        self._model = self._yolo_cls(str(model_path), task=config.task)
 
         def _epoch_callback(trainer_obj):
             if self._cancel_requested:

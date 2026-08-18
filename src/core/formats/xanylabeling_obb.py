@@ -1,4 +1,4 @@
-"""X-AnyLabeling JSON exporter for oriented bounding boxes."""
+"""X-AnyLabeling JSON import/export for oriented bounding boxes."""
 from __future__ import annotations
 
 import json
@@ -7,6 +7,70 @@ import os
 from pathlib import Path
 
 from src.core.annotation import Annotation, ImageAnnotation
+
+
+def import_xanylabeling_obb(input_dir: Path | str) -> list[ImageAnnotation]:
+    """Import X-AnyLabeling ``rotation`` shapes from JSON sidecar files."""
+    input_dir = Path(input_dir)
+    results: list[ImageAnnotation] = []
+    for json_path in sorted(input_dir.rglob("*.json")):
+        try:
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+
+        image_width = data.get("imageWidth", 0)
+        image_height = data.get("imageHeight", 0)
+        if not isinstance(image_width, (int, float)) or not isinstance(
+            image_height, (int, float)
+        ):
+            continue
+        if image_width <= 0 or image_height <= 0:
+            continue
+
+        annotations: list[Annotation] = []
+        for shape in data.get("shapes", []):
+            if not isinstance(shape, dict) or shape.get("shape_type") != "rotation":
+                continue
+            points = shape.get("points", [])
+            if not isinstance(points, list) or len(points) != 4:
+                continue
+            try:
+                polygon = [
+                    (float(point[0]) / image_width, float(point[1]) / image_height)
+                    for point in points
+                ]
+            except (TypeError, ValueError, IndexError, ZeroDivisionError):
+                continue
+            xs = [point[0] for point in polygon]
+            ys = [point[1] for point in polygon]
+            x1, x2 = min(xs), max(xs)
+            y1, y2 = min(ys), max(ys)
+            annotations.append(
+                Annotation(
+                    class_name=str(shape.get("label") or "unknown"),
+                    class_id=0,
+                    bbox=((x1 + x2) / 2, (y1 + y2) / 2, x2 - x1, y2 - y1),
+                    polygon=polygon,
+                    confirmed=True,
+                    source="manual",
+                )
+            )
+
+        if not annotations:
+            continue
+        raw_image_path = data.get("imagePath") or (json_path.stem + ".jpg")
+        image_path = str(raw_image_path).replace("\\", "/").rsplit("/", 1)[-1]
+        results.append(
+            ImageAnnotation(
+                image_path=image_path,
+                image_size=(int(image_width), int(image_height)),
+                annotations=annotations,
+            )
+        )
+    return results
 
 
 def _relative_image_path(image_path: str) -> Path:

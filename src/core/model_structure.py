@@ -194,7 +194,9 @@ def parse_model_structure(model_path: str | Path, imgsz: int = 640) -> list[Laye
         ModelStructureError: file missing, unloadable/corrupt, or not a YOLO
             model. The message is a friendly Chinese string.
     """
-    path = Path(model_path)
+    from src.core.resources import resolve_pretrained_model_path
+
+    path = resolve_pretrained_model_path(model_path)
     # A bare filename with no directory component (e.g. "yolov8n.pt") is a
     # pretrained weight name that ultralytics resolves from its cache or
     # downloads — don't reject it on a local-existence check. Only paths that

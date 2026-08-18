@@ -17,10 +17,12 @@ dist/
 venv/
 env/
 
-# ---- 模型权重: 不入库, 见 README 的下载说明 ----
+# ---- 模型权重: 默认不入库；打包内置的预训练权重除外 ----
 *.pt
 *.pth
 *.onnx
+!pretrained_models/
+!pretrained_models/*.pt
 
 # ---- 运行时生成 (ultralytics 训练/数据集) ----
 datasets/

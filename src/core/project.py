@@ -42,6 +42,9 @@ class ProjectConfig:
     # Explicit registry of user-created data versions. Kept alongside the
     # filesystem scan so empty versions are visible immediately and persistently.
     data_folders: list[str] = field(default_factory=list)
+    # Folders removed from the application's data-version index. Their files
+    # stay on disk, so the filesystem scanner must explicitly ignore them.
+    excluded_data_folders: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -61,6 +64,7 @@ class ProjectConfig:
             "tags": self.tags,
             "active_data_folder": self.active_data_folder,
             "data_folders": self.data_folders,
+            "excluded_data_folders": self.excluded_data_folders,
         }
 
     @classmethod
@@ -82,6 +86,7 @@ class ProjectConfig:
             tags=list(d.get("tags", [])),
             active_data_folder=d.get("active_data_folder", ""),
             data_folders=list(d.get("data_folders", [])),
+            excluded_data_folders=list(d.get("excluded_data_folders", [])),
         )
 
     def get_class_color(self, class_name: str) -> str:
@@ -207,13 +212,51 @@ class ProjectManager:
             return False
         return any(part.casefold() in IGNORED_IMAGE_TREE_DIR_NAMES for part in rel.parts[:-1])
 
+    def _is_excluded_image_path(self, path: Path, image_root: Path) -> bool:
+        """Return whether an image belongs to a removed data-version index."""
+        try:
+            relative_parent = path.relative_to(image_root).parent.as_posix()
+        except ValueError:
+            return False
+        return self._is_excluded_data_folder(relative_parent)
+
+    def _is_excluded_data_folder(self, folder: str | None) -> bool:
+        """Return whether a folder was removed from the data-version index."""
+        normalized = self._normalize_data_folder(folder)
+        if not normalized:
+            return False
+        for excluded in self.config.excluded_data_folders:
+            excluded_name = self._normalize_data_folder(excluded)
+            if excluded_name and (
+                normalized == excluded_name
+                or normalized.startswith(excluded_name + "/")
+            ):
+                return True
+        return False
+
+    def _restore_data_folder_index(self, folder: str) -> None:
+        """Make an explicitly created/imported folder visible in the index."""
+        name = self._normalize_data_folder(folder)
+        self.config.excluded_data_folders = [
+            excluded
+            for excluded in self.config.excluded_data_folders
+            if not (
+                name == self._normalize_data_folder(excluded)
+                or name.startswith(self._normalize_data_folder(excluded) + "/")
+            )
+        ]
+
     def list_data_folders(self) -> list[str]:
         """List folders under image_dir that can be used as data versions."""
         img_dir = self.image_root()
         folders: set[str] = set()
         for folder in self.config.data_folders:
             normalized = self._normalize_data_folder(folder)
-            if normalized and not self._is_ignored_data_folder(normalized):
+            if (
+                normalized
+                and not self._is_ignored_data_folder(normalized)
+                and not self._is_excluded_data_folder(normalized)
+            ):
                 folders.add(normalized)
         if not img_dir.exists():
             return sorted(folders, key=lambda s: (s.count("/"), s.lower()))
@@ -232,6 +275,7 @@ class ProjectManager:
             if (
                 rel
                 and not self._is_ignored_data_folder(rel)
+                and not self._is_excluded_data_folder(rel)
                 and not any(part.startswith(".") for part in rel.split("/"))
             ):
                 folders.add(rel)
@@ -244,6 +288,7 @@ class ProjectManager:
             raise ValueError("folder name is empty")
         target = self.image_root() / Path(name)
         target.mkdir(parents=True, exist_ok=True)
+        self._restore_data_folder_index(name)
         if name not in self.config.data_folders:
             self.config.data_folders.append(name)
             self.config.data_folders = self.list_data_folders()
@@ -292,31 +337,35 @@ class ProjectManager:
         return new_name
 
     def delete_data_folder(self, folder: str) -> None:
-        """Delete an empty data-version folder and its empty mirrored label folder."""
+        """Remove a data version from the index without touching files on disk."""
         name = self._normalize_data_folder(folder)
         if not name:
             raise ValueError("folder name is empty")
-        target = self.image_root() / Path(name)
-        label_root = Path(self.config.label_dir)
-        if not label_root.is_absolute():
-            label_root = self.project_dir / label_root
-        label_target = label_root / Path(name)
-        if label_target.exists():
-            for child in label_target.rglob("*"):
-                if child.is_file():
-                    raise OSError(f"label folder is not empty: {label_target}")
-        target.rmdir()
-        if label_target.exists():
-            for child in sorted(label_target.rglob("*"), reverse=True):
-                if child.is_dir():
-                    child.rmdir()
-            label_target.rmdir()
-        if self.config.active_data_folder == name:
+        active_folder = self._normalize_data_folder(self.config.active_data_folder)
+        if active_folder == name or active_folder.startswith(name + "/"):
             self.config.active_data_folder = ""
         self.config.data_folders = [
-            f for f in self.config.data_folders
-            if f != name and not f.startswith(name + "/")
+            f
+            for f in self.config.data_folders
+            if not (
+                self._normalize_data_folder(f) == name
+                or self._normalize_data_folder(f).startswith(name + "/")
+            )
         ]
+        excluded = {
+            self._normalize_data_folder(f)
+            for f in self.config.excluded_data_folders
+            if self._normalize_data_folder(f)
+        }
+        excluded = {
+            f for f in excluded
+            if f != name and not f.startswith(name + "/")
+        }
+        excluded.add(name)
+        self.config.excluded_data_folders = sorted(
+            excluded,
+            key=lambda s: (s.count("/"), s.lower()),
+        )
 
     def move_images_to_folder(self, paths, folder: str) -> tuple[list[Path], list[Path]]:
         """Move images and their mirrored label JSONs into a data-version folder.
@@ -329,6 +378,8 @@ class ProjectManager:
         root = self.image_root()
         target_dir = root / Path(folder_name) if folder_name else root
         target_dir.mkdir(parents=True, exist_ok=True)
+        if folder_name:
+            self._restore_data_folder_index(folder_name)
 
         moved: list[Path] = []
         skipped: list[Path] = []
@@ -376,6 +427,8 @@ class ProjectManager:
         root = self.image_root()
         target_dir = root / Path(folder_name) if folder_name else root
         target_dir.mkdir(parents=True, exist_ok=True)
+        if folder_name:
+            self._restore_data_folder_index(folder_name)
 
         imported: list[Path] = []
         skipped: list[Path] = []
@@ -438,7 +491,7 @@ class ProjectManager:
         folder = self._normalize_data_folder(
             self.config.active_data_folder if data_folder is None else data_folder
         )
-        if self._is_ignored_data_folder(folder):
+        if self._is_ignored_data_folder(folder) or self._is_excluded_data_folder(folder):
             return []
         scan_root = img_dir / Path(folder) if folder else img_dir
         if not scan_root.exists():
@@ -449,6 +502,7 @@ class ProjectManager:
                 p.is_file()
                 and p.suffix.lower() in IMAGE_EXTENSIONS
                 and not self._is_ignored_image_path(p, img_dir)
+                and not self._is_excluded_image_path(p, img_dir)
             )
         )
 

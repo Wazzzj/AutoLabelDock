@@ -1,21 +1,21 @@
+# 在项目根目录使用 PowerShell 执行。
+# 输出结构：dist\AutoLabelDock\AutoLabelDock.exe + dist\AutoLabelDock\lib\
+# lib 目录包含 Python 依赖、静态资源以及 pretrained_models 预训练权重目录。
+# 使用 --windowed，仅显示 Qt 主窗口；训练子进程通过临时事件文件回传进度。
 python -m PyInstaller `
   --noconfirm `
   --clean `
-  --console `
+  --windowed `
   --onedir `
-  --contents-directory . `
+  --contents-directory "lib" `
   --name AutoLabelDock `
+  --icon "icon/logo.ico" `
   --paths "." `
   --add-data "config/static_resources.json;config" `
   --add-data "config/train_templates.json;config" `
   --add-data "resources;resources" `
   --add-data "icon;icon" `
   --add-data "logoicon;logoicon" `
-  --add-data "yolo11n.pt;." `
-  --add-data "yolo11n-cls.pt;." `
-  --add-data "yolo11n-obb.pt;." `
-  --add-data "yolo11n-seg.pt;." `
-  --add-data "yolo11s-seg.pt;." `
-  --add-data "yolo26n.pt;." `
+  --add-data "pretrained_models;pretrained_models" `
   --hidden-import pyqtgraph `
   main.py

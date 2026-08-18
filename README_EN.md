@@ -143,7 +143,7 @@ It turns "annotation" and "training" into a single closed loop: label a batch of
 | Format | Export | Import | Applicable tasks |
 |:---|:---:|:---:|:---|
 | YOLO (txt) | ✅ | ✅ | Detection / Segmentation / OBB / Pose |
-| VOC OBB (xml) | ❌ | ✅ | OBB |
+| roLabelImg OBB (xml) | ✅ | ✅ | OBB |
 | COCO (json) | ✅ | ✅ | Detection / Pose |
 | labelme (json) | ✅ | ✅ | Detection / Pose |
 | X-AnyLabeling OBB (json) | ✅ | ✅ | OBB |
@@ -153,9 +153,9 @@ It turns "annotation" and "training" into a single closed loop: label a batch of
 
 iSAT export mirrors image subdirectories under `labels/` and writes one same-stem JSON file per image with standard `info`, `objects`, pixel-space `segmentation`, `bbox`, `area`, `group`, and `layer` fields. Polygon contours are preserved; bbox-only annotations are converted to four-point polygons, and confirmed-only export is supported.
 
-OBB projects use the normalized Ultralytics format `class_id x1 y1 x2 y2 x3 y3 x4 y4`. Set the project task to `obb` before importing nine-column YOLO labels so they are not mistaken for a small pose layout. VOC OBB import accepts `robndbox` XML with radian angles, and `classes.txt` accepts both one class name per line and indexed entries such as `0:label`.
+OBB projects use the normalized Ultralytics format `class_id x1 y1 x2 y2 x3 y3 x4 y4`. Set the project task to `obb` before importing nine-column YOLO labels so they are not mistaken for a small pose layout. `classes.txt` accepts both one class name per line and indexed entries such as `0:label`.
 
-OBB projects can export X-AnyLabeling-style JSON with four pixel-coordinate points, `shape_type: "rotation"`, and a radian `direction`, while preserving image subdirectories. Labelme / X-AnyLabeling JSON oriented boxes stored in this structure are also imported as four-corner OBBs. Images and JSON files must share the same stem and live under the configured `images/` and `labels/` directories.
+OBB import/export is split into two explicit formats. roLabelImg XML stores `robndbox` values (`cx`, `cy`, `w`, `h`, and a radian `angle`); X-AnyLabeling JSON stores four pixel-coordinate points with `shape_type: "rotation"` and a radian `direction`. Both formats preserve image subdirectories and use same-stem image/annotation files.
 
 Press `O` or choose **Oriented box** from the canvas context menu, then hold the left mouse button and drag out a rectangle. Select the box and drag the circular handle outside its top edge to rotate the complete box around its center; dragging a corner resizes it like a regular box while preserving a true rectangle.
 
@@ -213,7 +213,7 @@ python main.py
 
 ## Model Weights
 
-This project **does not ship any model weights**. Official YOLO pretrained models (`yolov8n.pt`, `yolov8s.pt`, `yolo26n.pt`, etc.) are downloaded automatically by Ultralytics the first time the related feature is used; if the automatic download fails, manually download the corresponding `.pt` file into the repository root (`autolabel-dock/`). See the next section for how to obtain the LocateAnything-3B weights.
+Bundled YOLO pretrained weights are stored in `pretrained_models/`. Other official models (`yolov8n.pt`, `yolov8s.pt`, etc.) are downloaded automatically by Ultralytics the first time they are used; if automatic download fails, place the corresponding `.pt` file in `pretrained_models/`. See the next section for how to obtain the LocateAnything-3B weights.
 
 ## Optional: LocateAnything Text Labeling
 

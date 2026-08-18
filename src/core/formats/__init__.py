@@ -169,8 +169,11 @@ def _register_builtin_formats() -> None:
     from src.core.formats.coco import export_coco, import_coco
     from src.core.formats.labelme import export_labelme, import_labelme
     from src.core.formats.isat import export_isat, import_isat
-    from src.core.formats.voc_obb import import_voc_obb
-    from src.core.formats.xanylabeling_obb import export_xanylabeling_obb
+    from src.core.formats.voc_obb import export_rolabelimg_obb, import_voc_obb
+    from src.core.formats.xanylabeling_obb import (
+        export_xanylabeling_obb,
+        import_xanylabeling_obb,
+    )
     from src.core.formats.imagefolder import (
         ImageFolderImporter,
         export_imagefolder,
@@ -187,6 +190,14 @@ def _register_builtin_formats() -> None:
     _registry.register("COCO", "COCO (json)", export_coco, needs_classes=True, output_is_file=True)
     _registry.register("labelme", "labelme (json)", export_labelme, needs_classes=False)
     _registry.register("iSAT", "iSAT (json)", export_isat, needs_classes=False)
+    _registry.register(
+        "RoLabelImg-OBB",
+        "roLabelImg OBB (xml)",
+        export_rolabelimg_obb,
+        needs_classes=False,
+        needs_task_type=True,
+        task_types={"obb"},
+    )
     _registry.register(
         "X-AnyLabeling-OBB",
         "X-AnyLabeling OBB (json)",
@@ -221,7 +232,11 @@ def _register_builtin_formats() -> None:
         input_is_file=False,
     )
     _import_registry.register(
-        "VOC-OBB", "VOC OBB (xml)", import_voc_obb,
+        "VOC-OBB", "roLabelImg OBB (xml)", import_voc_obb,
+        input_is_file=False,
+    )
+    _import_registry.register(
+        "X-AnyLabeling-OBB", "X-AnyLabeling OBB (json)", import_xanylabeling_obb,
         input_is_file=False,
     )
     _import_registry.register(

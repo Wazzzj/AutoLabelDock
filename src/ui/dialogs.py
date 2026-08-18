@@ -397,6 +397,16 @@ class ImportDialog(QDialog):
             self._help_label.setText(
                 "iSAT: 选择包含同名图片和 JSON 标注的数据集目录，通常还包含 isat.yaml。"
             )
+        elif name == "VOC-OBB":
+            self._path_edit.setPlaceholderText("选择包含 roLabelImg XML 标注的目录")
+            self._help_label.setText(
+                "roLabelImg OBB: 选择包含 .xml 旋转框标注文件的目录。"
+            )
+        elif name == "X-AnyLabeling-OBB":
+            self._path_edit.setPlaceholderText("选择包含 X-AnyLabeling JSON 标注的目录")
+            self._help_label.setText(
+                "X-AnyLabeling OBB: 选择包含 .json rotation 旋转框标注文件的目录。"
+            )
         else:
             self._path_edit.setPlaceholderText("选择包含 JSON 标注的目录")
             self._help_label.setText("labelme: 选择包含 .json 标注文件的目录。")

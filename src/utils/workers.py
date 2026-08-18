@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 from PyQt5.QtCore import QThread, pyqtSignal, QMutex
@@ -50,6 +51,7 @@ class TrainWorker(QThread):
         self._outcome_payload = None
         self._cancel_requested = False
         self._cancel_path: Path | None = None
+        self._event_path: Path | None = None
         self._process: subprocess.Popen | None = None
         self._process_lock = threading.Lock()
         # QThread.finished is emitted only after run() returns and its Python
@@ -116,12 +118,14 @@ class TrainWorker(QThread):
                 temp_root = Path(temp_dir)
                 config_path = temp_root / "config.json"
                 cancel_path = temp_root / "cancel"
+                event_path = temp_root / "events.jsonl"
                 config_path.write_text(
                     json.dumps(asdict(self._config), ensure_ascii=False),
                     encoding="utf-8",
                 )
                 with self._process_lock:
                     self._cancel_path = cancel_path
+                    self._event_path = event_path
                 if self._cancel_requested:
                     cancel_path.touch(exist_ok=True)
 
@@ -140,25 +144,21 @@ class TrainWorker(QThread):
                     command,
                     cwd=str(project_root),
                     env=env,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    bufsize=1,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
                     creationflags=creationflags,
                 )
                 with self._process_lock:
                     self._process = process
 
-                if process.stdout is not None:
-                    for raw_line in process.stdout:
-                        line = raw_line.rstrip()
-                        if line.startswith(_TRAIN_EVENT_PREFIX):
-                            self._handle_process_event(line[len(_TRAIN_EVENT_PREFIX):])
-                        elif line:
-                            logger.debug("[training process] %s", line)
-                exit_code = process.wait()
+                event_offset = 0
+                while True:
+                    event_offset = self._drain_process_events(event_path, event_offset)
+                    exit_code = process.poll()
+                    if exit_code is not None:
+                        self._drain_process_events(event_path, event_offset)
+                        break
+                    time.sleep(0.1)
                 self._recover_process_outcome(exit_code)
         except Exception as exc:
             logger.exception("Failed to run isolated training process")
@@ -168,14 +168,19 @@ class TrainWorker(QThread):
             with self._process_lock:
                 self._process = None
                 self._cancel_path = None
+                self._event_path = None
 
     def _build_training_command(self, config_path: Path, cancel_path: Path) -> list[str]:
+        event_path = self._event_path
+        if event_path is None:
+            raise RuntimeError("training event path is not initialized")
         if getattr(sys, "frozen", False):
             return [
                 sys.executable,
                 "--train-process",
                 str(config_path),
                 str(cancel_path),
+                str(event_path),
             ]
         return [
             sys.executable,
@@ -184,7 +189,26 @@ class TrainWorker(QThread):
             "src.engine.train_process",
             str(config_path),
             str(cancel_path),
+            str(event_path),
         ]
+
+    def _drain_process_events(self, event_path: Path, offset: int) -> int:
+        """Read newly appended training events and return the next byte offset."""
+        if not event_path.exists():
+            return offset
+        try:
+            with event_path.open("r", encoding="utf-8", errors="replace") as handle:
+                handle.seek(offset)
+                for raw_line in handle:
+                    line = raw_line.rstrip()
+                    if line.startswith(_TRAIN_EVENT_PREFIX):
+                        self._handle_process_event(line[len(_TRAIN_EVENT_PREFIX):])
+                    elif line:
+                        logger.debug("[training process] %s", line)
+                return handle.tell()
+        except OSError:
+            logger.exception("Failed to read training event file: %s", event_path)
+            return offset
 
     def _handle_process_event(self, payload: str) -> None:
         try:
