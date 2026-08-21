@@ -88,7 +88,7 @@ def _json_path(output_dir: Path, image_path: str) -> Path:
 
 
 def _image_path(output_dir: Path, json_path: Path, image_path: str) -> str:
-    image_abs = output_dir.parent / "images" / _relative_image_path(image_path)
+    image_abs = output_dir / _relative_image_path(image_path)
     return os.path.relpath(image_abs, json_path.parent).replace("\\", "/")
 
 

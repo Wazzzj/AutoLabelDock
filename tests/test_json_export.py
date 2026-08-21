@@ -32,7 +32,7 @@ def test_labelme_export_writes_valid_relative_image_path_and_polygon(tmp_path):
     assert json_path.exists()
 
     data = json.loads(json_path.read_text(encoding="utf-8"))
-    assert data["imagePath"] == "../../images/batch_a/sample.jpg"
+    assert data["imagePath"] == "sample.jpg"
     assert data["shapes"] == [
         {
             "label": "part",

@@ -117,7 +117,7 @@ def test_xanylabeling_detect_export_writes_four_point_rectangle(tmp_path):
             encoding="utf-8"
         )
     )
-    assert data["imagePath"] == "../../images/batch/sample.png"
+    assert data["imagePath"] == "sample.png"
     assert data["imageWidth"] == 200
     assert data["imageHeight"] == 100
     assert data["shapes"] == [

@@ -128,13 +128,23 @@ AutoLabel Dock 是一个基于 **PyQt5 + Ultralytics YOLO** 的桌面端图像�
 | ImageFolder | 支持 | 支持 | 分类 |
 | CSV | 支持 | 不支持 | 分类 |
 
-iSAT 导出会在 `labels/` 下按图片子目录生成同名 JSON，写入标准 `info`、`objects`、像素级 `segmentation`、`bbox`、`area`、`group` 和 `layer` 字段。多边形会保留真实轮廓；只有矩形框的标注会转换为四点多边形，同时支持“仅导出已确认标注”。
+导出目录会自动采用目标格式的常见结构：
+
+| 导出格式 | 输出结构 |
+|:---|:---|
+| labelme / X-AnyLabeling Detect / X-AnyLabeling OBB / iSAT | 图片与同名 JSON 并排 |
+| roLabelImg OBB | 图片与同名 XML 并排 |
+| YOLO | `images/` 与 `labels/` 分开，并生成 `data.yaml` |
+| COCO | `images/` 与 `annotations/coco.json` 分开 |
+| ImageFolder | 直接按类别建立图片目录，不额外生成 `images/` 或 `labels/` |
+
+iSAT 导出会按图片子目录将图片和同名 JSON 放在一起，写入标准 `info`、`objects`、像素级 `segmentation`、`bbox`、`area`、`group` 和 `layer` 字段。多边形会保留真实轮廓；只有矩形框的标注会转换为四点多边形，同时支持“仅导出已确认标注”。
 
 X-AnyLabeling 普通目标检测标注请在 `detect` 项目中选择 `X-AnyLabeling Detect (json)` 导入或导出。导入兼容 `shape_type: "rectangle"` 的两点和四点写法，四点矩形会转换为水平外接框；既可以选择 JSON 所在目录，也可以选择包含 `jsons/` 子目录的数据集根目录。空标注 JSON 会被忽略，图片需要提前导入当前项目并与 JSON 中的 `imagePath` 同名。导出使用 X-AnyLabeling 四点矩形结构，并保留类别、置信度和图片尺寸。
 
 OBB 项目导入和训练使用 Ultralytics YOLO OBB 的归一化四点格式：`class_id x1 y1 x2 y2 x3 y3 x4 y4`。导入 9 列 YOLO 标签前应先将项目类型设为 `obb`，避免与少量关键点 pose 数据产生格式歧义。`classes.txt` 同时兼容每行一个类别和 `0:label` 形式。
 
-OBB 导入和导出明确拆分为两种格式：roLabelImg XML 使用 `robndbox` 的 `cx`、`cy`、`w`、`h`、`angle` 字段，角度按弧度处理；X-AnyLabeling JSON 使用四个像素坐标点、`shape_type: "rotation"` 和 `direction` 弧度角。两种格式均保留图片子目录结构；图片与标注文件需要同名。
+OBB 导入和导出明确拆分为两种格式：roLabelImg XML 使用 `robndbox` 的 `cx`、`cy`、`w`、`h`、`angle` 字段，角度按弧度处理；X-AnyLabeling JSON 使用四个像素坐标点、`shape_type: "rotation"` 和 `direction` 弧度角。两种格式均保留图片子目录结构，导出时图片与同名标注文件放在一起。
 
 OBB 标注可按 `O` 或在画布右键菜单选择“旋转框”，按住鼠标左键直接拖出矩形。创建后选中旋转框，拖动框外的圆形旋转手柄可绕中心整体旋转；拖动四角可像普通矩形框一样缩放，并始终保持矩形形状。
 

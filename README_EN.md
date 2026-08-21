@@ -158,13 +158,23 @@ The classification annotation page uses a dataset-oriented workspace: class butt
 | ImageFolder | ✅ | ✅ | Classification (folder-per-class) |
 | CSV | ✅ | ❌ | Classification |
 
-iSAT export mirrors image subdirectories under `labels/` and writes one same-stem JSON file per image with standard `info`, `objects`, pixel-space `segmentation`, `bbox`, `area`, `group`, and `layer` fields. Polygon contours are preserved; bbox-only annotations are converted to four-point polygons, and confirmed-only export is supported.
+Exports automatically use the conventional layout for each target format:
+
+| Export format | Output layout |
+|:---|:---|
+| labelme / X-AnyLabeling Detect / X-AnyLabeling OBB / iSAT | Each image is placed beside its same-stem JSON |
+| roLabelImg OBB | Each image is placed beside its same-stem XML |
+| YOLO | Separate `images/` and `labels/` trees plus `data.yaml` |
+| COCO | Separate `images/` and `annotations/coco.json` |
+| ImageFolder | Images are placed directly in class directories; no extra `images/` or `labels/` tree |
+
+iSAT export mirrors image subdirectories and places each image beside its same-stem JSON with standard `info`, `objects`, pixel-space `segmentation`, `bbox`, `area`, `group`, and `layer` fields. Polygon contours are preserved; bbox-only annotations are converted to four-point polygons, and confirmed-only export is supported.
 
 For regular X-AnyLabeling object-detection annotations, use `X-AnyLabeling Detect (json)` in a `detect` project. Import accepts both two-point and four-point `shape_type: "rectangle"` shapes, converting four corners to their axis-aligned enclosing box. You may select either the JSON directory or a dataset root containing a `jsons/` subdirectory. Empty annotation files are ignored; the matching images must already be present in the project. Export writes X-AnyLabeling four-point rectangles and preserves the class, confidence, and image dimensions.
 
 OBB projects use the normalized Ultralytics format `class_id x1 y1 x2 y2 x3 y3 x4 y4`. Set the project task to `obb` before importing nine-column YOLO labels so they are not mistaken for a small pose layout. `classes.txt` accepts both one class name per line and indexed entries such as `0:label`.
 
-OBB import/export is split into two explicit formats. roLabelImg XML stores `robndbox` values (`cx`, `cy`, `w`, `h`, and a radian `angle`); X-AnyLabeling JSON stores four pixel-coordinate points with `shape_type: "rotation"` and a radian `direction`. Both formats preserve image subdirectories and use same-stem image/annotation files.
+OBB import/export is split into two explicit formats. roLabelImg XML stores `robndbox` values (`cx`, `cy`, `w`, `h`, and a radian `angle`); X-AnyLabeling JSON stores four pixel-coordinate points with `shape_type: "rotation"` and a radian `direction`. Both formats preserve image subdirectories and export each image beside its same-stem annotation file.
 
 Press `O` or choose **Oriented box** from the canvas context menu, then hold the left mouse button and drag out a rectangle. Select the box and drag the circular handle outside its top edge to rotate the complete box around its center; dragging a corner resizes it like a regular box while preserving a true rectangle.
 

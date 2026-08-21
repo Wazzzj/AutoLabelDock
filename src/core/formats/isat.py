@@ -113,7 +113,9 @@ def export_isat(
                 "note": "",
             })
 
-        image_folder = (Path("images") / relative_image.parent).as_posix()
+        image_folder = relative_image.parent.as_posix()
+        if image_folder == ".":
+            image_folder = ""
         data = {
             "info": {
                 "description": "ISAT",

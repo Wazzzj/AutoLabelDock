@@ -159,7 +159,7 @@ class TestISATImport(unittest.TestCase):
         data = json.loads(json_path.read_text(encoding="utf-8"))
         self.assertEqual(data["info"], {
             "description": "ISAT",
-            "folder": "images/batch_a",
+            "folder": "batch_a",
             "name": "sample.jpeg",
             "width": 200,
             "height": 100,

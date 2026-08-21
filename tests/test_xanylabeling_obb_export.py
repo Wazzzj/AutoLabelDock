@@ -36,7 +36,7 @@ def test_xanylabeling_obb_export_writes_rotation_shape_and_relative_image(tmp_pa
     data = json.loads(
         (labels_dir / "batch_a" / "sample.json").read_text(encoding="utf-8")
     )
-    assert data["imagePath"] == "../../images/batch_a/sample.jpg"
+    assert data["imagePath"] == "sample.jpg"
     assert data["imageWidth"] == 100
     assert data["imageHeight"] == 80
     assert data["imageData"] is None

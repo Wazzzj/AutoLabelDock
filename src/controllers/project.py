@@ -230,9 +230,8 @@ class ProjectController:
                 fmt=fmt,
                 only_confirmed=only_confirmed,
             )
-            labels_root = output_root / "labels"
-            labels_root.mkdir(parents=True, exist_ok=True)
-            export_output = output_root if fmt == "YOLO" else labels_root
+            export_output = self._format_export_output(output_root, fmt)
+            export_output.mkdir(parents=True, exist_ok=True)
             export_annotations = source_annotations if fmt in {"ImageFolder", "CSV"} else annotations
             registry.export(
                 fmt,
@@ -255,6 +254,25 @@ class ProjectController:
             logger.error("Export failed: %s", e, exc_info=True)
             QMessageBox.warning(self._parent, "导出失败", str(e))
             raise
+
+    _SIDECAR_EXPORT_FORMATS = frozenset({
+        "labelme",
+        "X-AnyLabeling-Detect",
+        "iSAT",
+        "RoLabelImg-OBB",
+        "X-AnyLabeling-OBB",
+    })
+
+    @classmethod
+    def _format_export_output(cls, output_root: Path, fmt: str) -> Path:
+        """Return the format-native annotation output directory."""
+        if fmt in cls._SIDECAR_EXPORT_FORMATS or fmt == "ImageFolder":
+            return output_root
+        if fmt == "COCO":
+            return output_root / "annotations"
+        if fmt == "YOLO":
+            return output_root
+        return output_root / "labels"
 
     @staticmethod
     def import_discovered_obb_sidecars(project: ProjectManager) -> tuple[int, str]:
@@ -369,8 +387,11 @@ class ProjectController:
     ) -> tuple[int, list, list]:
         image_root = project.image_root()
         scan_root = image_root / Path(data_version) if data_version else image_root
-        images_out = output_root / "images"
-        images_out.mkdir(parents=True, exist_ok=True)
+        sidecar_layout = fmt in self._SIDECAR_EXPORT_FORMATS
+        image_output_root = output_root if sidecar_layout else output_root / "images"
+        copy_images_here = fmt != "ImageFolder"
+        if copy_images_here:
+            image_output_root.mkdir(parents=True, exist_ok=True)
 
         image_count = 0
         annotations = []
@@ -384,6 +405,13 @@ class ProjectController:
 
             label_path = project.label_path_for(image_path)
             ia = load_annotation(label_path)
+            if fmt == "ImageFolder" and not self._has_format_exportable_annotations(
+                ia,
+                fmt,
+                only_confirmed,
+                project.config.task_type,
+            ):
+                continue
             if only_confirmed and not self._has_format_exportable_annotations(
                 ia,
                 fmt,
@@ -392,13 +420,23 @@ class ProjectController:
             ):
                 continue
 
-            image_dst = images_out / rel
-            if self._copy_export_file(image_path, image_dst):
+            if copy_images_here:
+                image_dst = image_output_root / rel
+                if self._copy_export_file(image_path, image_dst):
+                    image_count += 1
+            elif image_path.exists():
+                # ImageFolder's exporter performs the one required copy into
+                # the class directory. Count it here without creating a second
+                # generic images/ tree.
                 image_count += 1
 
             if ia is None:
                 continue
-            exported_image_path = (Path("images") / rel).as_posix()
+            exported_image_path = (
+                rel.as_posix()
+                if sidecar_layout
+                else (Path("images") / rel).as_posix()
+            )
             annotations.append(replace(ia, image_path=exported_image_path))
             source_annotations.append(replace(ia, image_path=str(image_path)))
 
