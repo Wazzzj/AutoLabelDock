@@ -105,6 +105,12 @@ It turns "annotation" and "training" into a single closed loop: label a batch of
 | Shortcut | Function |
 |:---|:---|
 | `1`–`9` | Quick-select class label |
+| `Space` | Confirm the current or selected images |
+| `Backspace` | Clear the class label from selected images |
+| `Delete` | Delete selected images and their app annotations after confirmation |
+| `Ctrl+A` | Select all images in the current filtered result |
+
+The classification annotation page uses a dataset-oriented workspace: class buttons and per-class image counts sit above the thumbnail grid, while the batch toolbar shows total, visible, labeled, and selected counts. It provides select-all-visible, invert, clear-selection, clear-class, and batch-delete actions. Use `Ctrl` or `Shift` to select multiple images, then click a class button to reclassify them together; deletion always requires confirmation.
 
 </details>
 

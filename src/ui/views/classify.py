@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from PyQt5.QtCore import Qt, QRect, QSize, pyqtSignal
-from PyQt5.QtGui import QColor, QFont, QPainter, QPixmap
+from PyQt5.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -145,6 +145,14 @@ class ThumbnailDelegate(QStyledItemDelegate):
             painter.fillRect(badge, QColor(PALETTE["danger"]))
             painter.setPen(QColor(PALETTE["ink"]))
             painter.drawText(badge, Qt.AlignCenter, "?")
+
+        if option.state & QStyle.State_Selected:
+            painter.setPen(QPen(QColor(PALETTE["primary"]), 3))
+            painter.drawRect(rect.adjusted(1, 1, -2, -2))
+            selected_badge = QRect(rect.x() + 5, rect.y() + 5, 20, 20)
+            painter.fillRect(selected_badge, QColor(PALETTE["primary"]))
+            painter.setPen(QColor(PALETTE["ink"]))
+            painter.drawText(selected_badge, Qt.AlignCenter, "✓")
 
         painter.restore()
 
@@ -389,6 +397,7 @@ class ClassButtonBar(QWidget):
         super().__init__(parent)
         self._classes: list[str] = []
         self._colors: dict[str, str] = {}
+        self._counts: dict[str, int] = {}
         self._buttons: dict[str, QPushButton] = {}
 
         self._layout = QHBoxLayout(self)
@@ -408,6 +417,18 @@ class ClassButtonBar(QWidget):
         self._add_btn = QPushButton("+ 添加类别")
         self._add_btn.clicked.connect(self.add_class_clicked.emit)
 
+    def _button_text(self, index: int, class_name: str) -> str:
+        prefix = f"{index + 1}  " if index < 9 else ""
+        return f"{prefix}{class_name}  ({self._counts.get(class_name, 0)})"
+
+    def set_counts(self, counts: dict[str, int]) -> None:
+        """Update per-class image counts without rebuilding the button bar."""
+        self._counts = dict(counts)
+        for idx, cls in enumerate(self._classes):
+            button = self._buttons.get(cls)
+            if button is not None:
+                button.setText(self._button_text(idx, cls))
+
     def set_classes(self, classes: list[str], colors: dict[str, str]) -> None:
         self._classes = list(classes)
         self._colors = dict(colors)
@@ -421,7 +442,7 @@ class ClassButtonBar(QWidget):
         self._buttons.clear()
 
         for idx, cls in enumerate(self._classes):
-            label = f"{idx + 1}  {cls}" if idx < 9 else cls
+            label = self._button_text(idx, cls)
             btn = QPushButton(label)
             color = self._colors.get(cls, PALETTE["primary"])
             btn.setStyleSheet(
@@ -430,6 +451,7 @@ class ClassButtonBar(QWidget):
                 f"QPushButton:hover {{ border-color:{PALETTE['text']}; }}"
             )
             btn.clicked.connect(lambda _checked=False, c=cls: self.class_clicked.emit(c))
+            btn.setToolTip(f"将当前图片或所有选中图片批量设置为 {cls}")
             self._layout.addWidget(btn)
             self._buttons[cls] = btn
 
@@ -531,6 +553,37 @@ class ClassifyView(TaskView):
         self._sort_combo.currentIndexChanged.connect(self._on_sort_changed)
         view_tb.addWidget(self._sort_combo)
 
+        selection_tb = QToolBar()
+        self._selection_summary = QLabel("共 0 张 | 可见 0 张 | 已标注 0 张 | 已选 0 张")
+        self._selection_summary.setStyleSheet(text_style("hint"))
+        selection_tb.addWidget(self._selection_summary)
+
+        selection_tb.addSeparator()
+        self._select_all_btn = QPushButton("全选可见")
+        self._select_all_btn.setToolTip("选中当前筛选结果中的全部图片 (Ctrl+A)")
+        self._select_all_btn.clicked.connect(self._select_all_visible)
+        selection_tb.addWidget(self._select_all_btn)
+
+        self._invert_selection_btn = QPushButton("反选")
+        self._invert_selection_btn.setToolTip("反选当前可见图片")
+        self._invert_selection_btn.clicked.connect(self._invert_visible_selection)
+        selection_tb.addWidget(self._invert_selection_btn)
+
+        self._clear_selection_btn = QPushButton("取消选择")
+        self._clear_selection_btn.clicked.connect(self._grid_clear_selection)
+        selection_tb.addWidget(self._clear_selection_btn)
+
+        self._clear_class_btn = QPushButton("清除类别")
+        self._clear_class_btn.setToolTip("清除选中图片的分类标签 (Backspace)")
+        self._clear_class_btn.clicked.connect(self._clear_selected_tags)
+        selection_tb.addWidget(self._clear_class_btn)
+
+        self._delete_selected_btn = QPushButton(icon("delete"), "删除图片")
+        self._delete_selected_btn.setToolTip("删除所有选中图片及其程序标注 (Delete)")
+        self._delete_selected_btn.clicked.connect(self._delete_selected_images)
+        set_button_role(self._delete_selected_btn, "danger")
+        selection_tb.addWidget(self._delete_selected_btn)
+
         view_tb.addSeparator()
         self._confirm_all_btn = QPushButton(icon("check_all"), "确认全部")
         self._confirm_all_btn.setToolTip("确认所有当前可见的、由模型自动标注且未确认的图片")
@@ -548,6 +601,12 @@ class ClassifyView(TaskView):
         view_tb.addWidget(self._preview_toggle_btn)
 
         layout.addWidget(view_tb)
+        layout.addWidget(selection_tb)
+
+        self._class_bar = ClassButtonBar()
+        self._class_bar.class_clicked.connect(self._apply_class)
+        self._class_bar.add_class_clicked.connect(self._on_add_class_clicked)
+        layout.addWidget(self._class_bar)
 
         self._splitter = QSplitter(Qt.Horizontal, self)
         self._grid = ThumbnailGridWidget()
@@ -563,13 +622,74 @@ class ClassifyView(TaskView):
 
         layout.addWidget(self._splitter, 1)
 
-        self._class_bar = ClassButtonBar()
-        self._class_bar.class_clicked.connect(self._apply_class)
-        self._class_bar.add_class_clicked.connect(self._on_add_class_clicked)
-        layout.addWidget(self._class_bar)
-
         self._grid.currentItemChanged.connect(self._on_grid_focus_changed)
+        self._grid.itemSelectionChanged.connect(self._update_workspace_summary)
         self._grid.delete_images_requested.connect(self._on_delete_images)
+        self._update_workspace_summary()
+
+    def _visible_items(self) -> list[QListWidgetItem]:
+        return [
+            self._grid.item(index)
+            for index in range(self._grid.count())
+            if not self._grid.item(index).isHidden()
+        ]
+
+    def _select_all_visible(self) -> None:
+        self._grid.blockSignals(True)
+        try:
+            self._grid.clearSelection()
+            for item in self._visible_items():
+                item.setSelected(True)
+        finally:
+            self._grid.blockSignals(False)
+        self._update_workspace_summary()
+
+    def _invert_visible_selection(self) -> None:
+        self._grid.blockSignals(True)
+        try:
+            for item in self._visible_items():
+                item.setSelected(not item.isSelected())
+        finally:
+            self._grid.blockSignals(False)
+        self._update_workspace_summary()
+
+    def _grid_clear_selection(self) -> None:
+        self._grid.clearSelection()
+        self._update_workspace_summary()
+
+    def _delete_selected_images(self) -> None:
+        paths = [Path(item.data(Qt.UserRole)) for item in self._selected_visible_items()]
+        if paths:
+            self._on_delete_images(paths)
+
+    def _update_workspace_summary(self) -> None:
+        if not hasattr(self, "_selection_summary"):
+            return
+        total = self._grid.count()
+        visible = 0
+        selected = 0
+        labeled = 0
+        class_counts = {class_name: 0 for class_name in self._classes}
+        for index in range(total):
+            item = self._grid.item(index)
+            if not item.isHidden():
+                visible += 1
+            if item.isSelected() and not item.isHidden():
+                selected += 1
+            visual = item.data(Qt.UserRole + 2)
+            if isinstance(visual, _ThumbnailVisual) and visual.label in class_counts:
+                labeled += 1
+                class_counts[visual.label] += 1
+        self._selection_summary.setText(
+            f"共 {total} 张 | 可见 {visible} 张 | 已标注 {labeled} 张 | 已选 {selected} 张"
+        )
+        self._class_bar.set_counts(class_counts)
+        has_selection = selected > 0
+        self._clear_selection_btn.setEnabled(has_selection)
+        self._clear_class_btn.setEnabled(has_selection)
+        self._delete_selected_btn.setEnabled(has_selection)
+        self._select_all_btn.setEnabled(visible > 0 and selected < visible)
+        self._invert_selection_btn.setEnabled(visible > 0)
 
     def _on_density_changed(self, value: int) -> None:
         self._grid.setIconSize(QSize(value, value))
@@ -616,6 +736,7 @@ class ClassifyView(TaskView):
         self._grid.clear()
         for path, visual, pix in snapshots:
             self._grid.add_image_item(path, visual, pixmap=pix)
+        self._update_workspace_summary()
 
     def _on_grid_focus_changed(self, current, _prev) -> None:
         if current is None:
@@ -653,6 +774,7 @@ class ClassifyView(TaskView):
 
         self._apply_persisted_preview_state()
         self._update_confirm_all_count()
+        self._update_workspace_summary()
 
     def _apply_persisted_preview_state(self) -> None:
         cfg = AppConfig.load(self._config_path)
@@ -729,11 +851,14 @@ class ClassifyView(TaskView):
         if key == Qt.Key_Space:
             self._confirm_focused_or_selected()
             return
-        if key in (Qt.Key_Delete, Qt.Key_Backspace):
+        if key == Qt.Key_Delete:
+            self._delete_selected_images()
+            return
+        if key == Qt.Key_Backspace:
             self._clear_selected_tags()
             return
         if key == Qt.Key_Escape:
-            self._grid.clearSelection()
+            self._grid_clear_selection()
             return
         super().keyPressEvent(event)
 
@@ -754,6 +879,7 @@ class ClassifyView(TaskView):
         else:
             for item in selected_items:
                 self._set_image_tag(item, class_name, source="manual", confirmed=True)
+        self._update_workspace_summary()
 
     def _set_image_tag(
         self,
@@ -818,6 +944,7 @@ class ClassifyView(TaskView):
             self._push_undo_for(path)
             self.annotations_changed.emit(path)
         self._request_confirm_all_count_update()
+        self._update_workspace_summary()
 
     def _on_delete_images(self, paths: list[Path]) -> None:
         """Delete image files and their labels from disk after confirmation."""
@@ -860,7 +987,11 @@ class ClassifyView(TaskView):
         if preview_in_deleted:
             self._preview.set_image(None)
 
+        if self._grid.count() > 0 and self._grid.currentItem() is None:
+            self._grid.setCurrentRow(0)
+
         self._request_confirm_all_count_update()
+        self._update_workspace_summary()
         self.status_changed.emit(
             f"已删除 {img_n} 张图片，{lbl_n} 个标注文件"
         )
@@ -878,6 +1009,7 @@ class ClassifyView(TaskView):
         self._classes = list(classes)
         if hasattr(self, "_class_bar"):
             self._class_bar.set_classes(self._classes, self._class_colors)
+            self._update_workspace_summary()
 
     def set_available_tags(self, tags: list[str]) -> None:
         if hasattr(self, "_preview"):
@@ -937,6 +1069,7 @@ class ClassifyView(TaskView):
             self._set_item_hidden_by_filter(it, self._compute_hidden(ia))
         self._restore_scroll_after_filter(current_item)
         self._request_confirm_all_count_update()
+        self._update_workspace_summary()
 
     def _compute_hidden(self, ia: ImageAnnotation | None) -> bool:
         """Pure predicate: should an image be hidden under the active filters?"""
@@ -1142,6 +1275,7 @@ class ClassifyView(TaskView):
         self._grid.update_visual(path, _compute_visual_state(ia, self._class_colors))
         self.annotations_changed.emit(path)
         self._request_confirm_all_count_update()
+        self._update_workspace_summary()
 
     def add_auto_annotations(self, anns, iou: float = 0.5) -> None:
         raise NotImplementedError("Use add_auto_class_prediction for classify view")
@@ -1171,4 +1305,5 @@ class ClassifyView(TaskView):
         self._push_undo_for(path)
         self.annotations_changed.emit(path)
         self._request_confirm_all_count_update()
+        self._update_workspace_summary()
         return True

@@ -12,7 +12,7 @@ import shutil
 from collections import OrderedDict
 from pathlib import Path
 
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import (
     QApplication,
@@ -82,7 +82,6 @@ class LabelPanel(QWidget):
         self._view: TaskView | None = None
         self._tag_ctrl = tag_controller  # may be None during isolated UI tests
         self._pending_ann_panel_state: dict = {}
-        self._class_filter_refresh_pending = False
 
         self._init_ui()
         self._connect_signals()
@@ -277,16 +276,15 @@ class LabelPanel(QWidget):
             self._la_bar.set_classes(self._project.config.classes)
 
     def _on_view_annotations_changed(self, _path) -> None:
-        """Refresh filters when a label introduces or removes a class."""
-        self.annotations_changed.emit(_path)
-        if self._class_filter_refresh_pending:
-            return
-        self._class_filter_refresh_pending = True
-        QTimer.singleShot(0, self._flush_class_filter_refresh)
+        """Forward a saved annotation change without rescanning the project.
 
-    def _flush_class_filter_refresh(self) -> None:
-        self._class_filter_refresh_pending = False
-        self._refresh_class_filter()
+        Drawing, confirming, moving, and deleting a box all reach this method.
+        Every selectable class is registered in ``project.config.classes`` by
+        the view before it is used, so rebuilding the filter from every label
+        JSON here is both redundant and noticeably blocks large projects.
+        Full discovery still runs when a project is loaded or imported.
+        """
+        self.annotations_changed.emit(_path)
 
     def _refresh_class_filter(self) -> None:
         """Rebuild the class filter combo from the current project's classes.

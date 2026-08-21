@@ -611,6 +611,10 @@ class MainWindow(QMainWindow):
                     self._project.list_data_folders(),
                     default_folder=self._project.config.active_data_folder,
                 )
+                # Annotation editing intentionally avoids project-wide label
+                # scans. Refresh classes and counts only when the user opens
+                # the training page and actually needs this information.
+                self._sync_train_available_classes()
                 self._refresh_train_filter_summary()
         self._last_tab_widget = current
 
@@ -1079,11 +1083,14 @@ class MainWindow(QMainWindow):
         self._train_panel.set_available_classes(
             merged_project_annotation_classes(self._project)
         )
-        self._refresh_train_filter_summary()
 
     def _on_label_annotations_changed(self, _path) -> None:
-        self._sync_train_available_classes()
-        self._refresh_train_filter_summary()
+        """Handle a per-image annotation save without blocking the editor.
+
+        Training classes and selected-image counts require walking all label
+        files. They are refreshed when the training tab becomes visible, so a
+        box confirmation/deletion remains a current-image operation here.
+        """
 
     def _on_label_user_tags_changed(self, path, tags) -> None:
         """Per-image tag edits — the view already saved the JSON; we only
