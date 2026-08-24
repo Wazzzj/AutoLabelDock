@@ -29,6 +29,7 @@ from PyQt5.QtWidgets import (
     QFormLayout,
     QLineEdit,
     QComboBox,
+    QFileDialog,
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 
@@ -643,6 +644,19 @@ class MainWindow(QMainWindow):
         open_action.triggered.connect(self._on_open_project)
         file_menu.addAction(open_action)
 
+        self._select_image_dir_action = QAction(
+            icon("open_project"), "选择图片目录...", self,
+        )
+        self._select_image_dir_action.setShortcut("Ctrl+Shift+O")
+        self._select_image_dir_action.setStatusTip(
+            "切换当前项目的图片来源目录，不复制或移动原图片"
+        )
+        self._select_image_dir_action.setEnabled(False)
+        self._select_image_dir_action.triggered.connect(
+            self._on_select_image_directory
+        )
+        file_menu.addAction(self._select_image_dir_action)
+
         file_menu.addSeparator()
 
         export_action = QAction(icon("export"), "导出标注...", self)
@@ -698,6 +712,7 @@ class MainWindow(QMainWindow):
     def open_project(self, project_manager: ProjectManager) -> None:
         """Open a project and switch to labeling workspace."""
         self._project = project_manager
+        self._select_image_dir_action.setEnabled(True)
         # Keep ProjectController in sync — methods like register_auto_class
         # depend on the controller's internal _project reference.
         self._project_ctrl._project = project_manager
@@ -818,6 +833,57 @@ class MainWindow(QMainWindow):
             f"项目: {project_manager.config.name} | "
             f"图片: {len(project_manager.list_images())} | "
             f"类别: {len(project_manager.config.classes)}"
+        )
+
+    def _on_select_image_directory(self) -> None:
+        """Select and persist a new image root for the current project."""
+        if self._project is None:
+            QMessageBox.information(self, "选择图片目录", "请先打开项目。")
+            return
+
+        current_root = self._project.image_root()
+        selected = QFileDialog.getExistingDirectory(
+            self,
+            "选择图片目录",
+            str(current_root if current_root.exists() else self._project.project_dir),
+        )
+        if not selected:
+            return
+
+        selected_path = Path(selected).resolve()
+        try:
+            if selected_path == current_root.resolve():
+                self._status_label.setText(f"图片目录未变化: {selected_path}")
+                return
+        except OSError:
+            pass
+
+        if self._label_panel is not None:
+            self._label_panel.save_and_cleanup()
+
+        try:
+            image_root = self._project.set_image_directory(selected_path)
+        except (OSError, ValueError) as exc:
+            logger.error("Failed to switch image directory: %s", exc, exc_info=True)
+            QMessageBox.warning(self, "选择图片目录失败", str(exc))
+            return
+
+        if self._label_panel is not None:
+            self._label_panel.set_project(self._project)
+        if self._preview_panel is not None:
+            self._preview_panel.set_project(self._project)
+        if self._train_panel is not None:
+            self._train_panel.set_available_data_folders(
+                self._project.list_data_folders(),
+                default_folder="",
+                preserve_selection=False,
+            )
+            self._sync_train_available_classes()
+            self._refresh_train_filter_summary()
+
+        image_count = len(self._project.list_images())
+        self._status_label.setText(
+            f"已选择图片目录: {image_root} | 图片: {image_count} 张"
         )
 
     def _on_preview_edit_requested(self, path) -> None:
@@ -957,6 +1023,7 @@ class MainWindow(QMainWindow):
         if self._project is not None and self._project.project_dir == Path(project_path):
             self._project = None
             self._project_ctrl._project = None
+            self._select_image_dir_action.setEnabled(False)
             self._status_label.setText("项目已移除")
 
     def _on_export(self) -> None:

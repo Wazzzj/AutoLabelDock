@@ -192,6 +192,35 @@ class ProjectManager:
             img_dir = self.project_dir / img_dir
         return img_dir
 
+    def set_image_directory(self, image_dir: Path | str) -> Path:
+        """Switch the project to an existing image directory without moving files.
+
+        Directories inside the project are stored as relative paths to keep the
+        project portable. External directories remain absolute. Data-version
+        selections belong to the previous image root, so their index state is
+        reset and will be rediscovered below the new root on demand.
+        """
+        selected = Path(image_dir).expanduser()
+        if not selected.exists():
+            raise FileNotFoundError(selected)
+        if not selected.is_dir():
+            raise NotADirectoryError(selected)
+
+        selected = selected.resolve()
+        project_root = self.project_dir.resolve()
+        try:
+            relative = selected.relative_to(project_root)
+            stored = str(relative) if relative.parts else "."
+        except ValueError:
+            stored = str(selected)
+
+        self.config.image_dir = stored
+        self.config.active_data_folder = ""
+        self.config.data_folders = []
+        self.config.excluded_data_folders = []
+        self.save()
+        return selected
+
     def _normalize_data_folder(self, folder: str | None) -> str:
         if not folder:
             return ""

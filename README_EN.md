@@ -96,9 +96,12 @@ It turns "annotation" and "training" into a single closed loop: label a batch of
 
 | Shortcut | Function |
 |:---|:---|
+| `Ctrl+Shift+O` | Select a local or external image directory for the current project without copying or moving files |
 | `Ctrl++` / `Ctrl+-` | Zoom in / out |
 | `Ctrl+0` | Fit to window |
 | `F5` | Rescan image directory |
+
+**File → Select Image Directory…** persists the selected path in `project.json`, resets stale data-version selections, and immediately refreshes annotation, preview, and training views. Existing files in both the old and new directories remain untouched.
 
 **Classification only**
 
