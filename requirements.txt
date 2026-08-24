@@ -3,6 +3,7 @@ pyqtgraph>=0.13
 ultralytics>=8.0
 pyyaml>=6.0
 packaging>=20.0
+onnxruntime>=1.16
 
 
 # Optional: LocateAnything-3B text-labeling backend (open-vocabulary detection).
