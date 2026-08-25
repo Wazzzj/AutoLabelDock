@@ -17,6 +17,7 @@ from PyQt5.QtWidgets import (
     QListWidgetItem,
     QDoubleSpinBox,
     QComboBox,
+    QCheckBox,
     QAbstractItemView,
     QFileDialog,
     QSpinBox,
@@ -314,6 +315,15 @@ class ModelPanel(QWidget):
         self._predict_device_combo.setToolTip("AUTO=自动选择；CUDA:0/1=指定显卡；CPU=强制使用 CPU")
         infer_form.addRow("device:", self._predict_device_combo)
 
+        self._retain_highest_confidence_roi_check = QCheckBox(
+            "每张图片仅保留置信度最高的 1 个 ROI 框"
+        )
+        self._retain_highest_confidence_roi_check.setChecked(False)
+        self._retain_highest_confidence_roi_check.setToolTip(
+            "启用后，模型推理、自动标注和批量标注都只保留每张图片中置信度最高的一个预测框"
+        )
+        infer_form.addRow("ROI 规则:", self._retain_highest_confidence_roi_check)
+
         infer_layout.addLayout(infer_form)
 
 
@@ -518,6 +528,10 @@ class ModelPanel(QWidget):
     def get_predict_device(self) -> str:
         return _DEVICE_OPTIONS.get(self._predict_device_combo.currentText(), "")
 
+    def should_retain_highest_confidence_roi(self) -> bool:
+        """Return whether all inference flows should keep only the best ROI."""
+        return self._retain_highest_confidence_roi_check.isChecked()
+
     def get_panel_settings(self) -> dict:
         """Return user-facing model/inference settings for persistence."""
         return {
@@ -527,6 +541,7 @@ class ModelPanel(QWidget):
             "class_match_mode": self.get_class_match_mode(),
             "predict_imgsz": self.get_predict_imgsz(),
             "predict_device": self.get_predict_device(),
+            "retain_highest_confidence_roi": self.should_retain_highest_confidence_roi(),
         }
 
     def apply_panel_settings(self, settings: dict) -> None:
@@ -552,6 +567,10 @@ class ModelPanel(QWidget):
         if "predict_device" in settings:
             label = _DEVICE_VALUE_TO_LABEL.get(str(settings["predict_device"]), "AUTO")
             self._predict_device_combo.setCurrentText(label)
+        if "retain_highest_confidence_roi" in settings:
+            self._retain_highest_confidence_roi_check.setChecked(
+                bool(settings["retain_highest_confidence_roi"])
+            )
 
     def _on_model_selected(self, row: int) -> None:
         if 0 <= row < len(self._models):

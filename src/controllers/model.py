@@ -491,6 +491,7 @@ class ModelController:
         iou: float = 0.45,
         imgsz: int | None = None,
         device: str | None = None,
+        retain_highest_confidence_roi: bool = False,
     ) -> tuple[QImage, str] | None:
         """Run the loaded Ultralytics model directly and return result.plot()."""
         if not self._predictor:
@@ -511,6 +512,9 @@ class ModelController:
             if not results:
                 return None
             result = results[0]
+            result = self._retain_highest_confidence_native_roi(
+                result, retain_highest_confidence_roi,
+            )
             plotted = self._plot_result_for_display(result)
             qimage = self._array_to_qimage(plotted)
             summary = self._native_result_summary(result)
@@ -528,6 +532,7 @@ class ModelController:
         iou: float = 0.45,
         imgsz: int | None = None,
         device: str | None = None,
+        retain_highest_confidence_roi: bool = False,
     ) -> tuple[Path, int] | None:
         """Run native YOLO prediction for many images and save plotted results."""
         if not self._predictor:
@@ -564,6 +569,9 @@ class ModelController:
                 if image_results:
                     results.extend(image_results)
                     for result in image_results:
+                        result = self._retain_highest_confidence_native_roi(
+                            result, retain_highest_confidence_roi,
+                        )
                         output_path = self._unique_prediction_path(
                             result_dir,
                             Path(getattr(result, "path", None) or image_path).name,
@@ -583,6 +591,22 @@ class ModelController:
     def _plot_result_for_display(result):
         """Render native YOLO output using Ultralytics' default visualization."""
         return result.plot()
+
+    @staticmethod
+    def _retain_highest_confidence_native_roi(result, enabled: bool):
+        """Slice an Ultralytics result to its highest-confidence spatial ROI."""
+        if not enabled:
+            return result
+        obb = getattr(result, "obb", None)
+        boxes = obb if obb is not None and len(obb) > 0 else getattr(result, "boxes", None)
+        confidences = getattr(boxes, "conf", None) if boxes is not None else None
+        if confidences is None or len(confidences) <= 1:
+            return result
+        scores = confidences.tolist() if hasattr(confidences, "tolist") else list(confidences)
+        scores = [float(score.item()) if hasattr(score, "item") else float(score) for score in scores]
+        highest_index = max(range(len(scores)), key=scores.__getitem__)
+        # Results slicing keeps boxes/OBB, masks and keypoints aligned.
+        return result[highest_index:highest_index + 1]
 
     @staticmethod
     def _unique_prediction_path(

@@ -293,6 +293,20 @@ def compute_iou(bbox1: tuple[float, float, float, float],
     return inter / union
 
 
+def retain_highest_confidence_roi(
+    annotations: list[Annotation],
+    enabled: bool = False,
+) -> list[Annotation]:
+    """Keep only the highest-confidence predicted ROI when the rule is enabled.
+
+    The original annotation objects are preserved, and ties keep the first ROI
+    returned by the model so the result remains deterministic.
+    """
+    if not enabled or len(annotations) <= 1:
+        return list(annotations)
+    return [max(annotations, key=lambda annotation: annotation.confidence)]
+
+
 def find_conflicts(
     existing: list[Annotation],
     predictions: list[Annotation],

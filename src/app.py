@@ -41,7 +41,7 @@ from src.core.config import (
 )
 from src.core.project import IMAGE_EXTENSIONS, ProjectManager
 from src.core.project_scan import best_project_data_candidate, current_project_data_candidate
-from src.core.annotation import ImageAnnotation
+from src.core.annotation import ImageAnnotation, retain_highest_confidence_roi
 from src.core.annotation_classes import merged_project_annotation_classes
 from src.core.label_io import load_annotation
 from src.ui.label_panel import LabelPanel
@@ -1371,6 +1371,7 @@ class MainWindow(QMainWindow):
         device = self._model_panel.get_predict_device()
         conf = self._model_panel.get_conf_threshold()
         iou = self._model_panel.get_iou_threshold()
+        retain_highest_roi = self._model_panel.should_retain_highest_confidence_roi()
         self._model_panel.set_busy(True, "正在推理…")
         QApplication.processEvents()
         try:
@@ -1390,6 +1391,7 @@ class MainWindow(QMainWindow):
                     iou=iou,
                     imgsz=imgsz,
                     device=device,
+                    retain_highest_confidence_roi=retain_highest_roi,
                 )
                 if saved is None:
                     self._status_label.setText("模型推理: 未生成结果")
@@ -1410,6 +1412,7 @@ class MainWindow(QMainWindow):
                 iou=iou,
                 imgsz=imgsz,
                 device=device,
+                retain_highest_confidence_roi=retain_highest_roi,
             )
             if native_result is None:
                 self._status_label.setText("模型推理: 未生成结果")
@@ -1531,6 +1534,10 @@ class MainWindow(QMainWindow):
         iou = self._model_panel.get_iou_threshold() if self._model_panel else 0.45
         overlap_iou = self._model_panel.get_overlap_iou_threshold() if self._model_panel else 0.5
         class_match_mode = self._model_panel.get_class_match_mode() if self._model_panel else "class_id"
+        retain_highest_roi = (
+            self._model_panel.should_retain_highest_confidence_roi()
+            if self._model_panel else False
+        )
 
         # Slow backends (LocateAnything) block for seconds inside predict(). On a
         # single-GPU box the X server shares the same card, so running that on
@@ -1540,6 +1547,7 @@ class MainWindow(QMainWindow):
         if self._la_ctrl.is_active:
             self._start_async_single_auto_label(
                 img_path, conf, iou, overlap_iou, class_match_mode, imgsz, device,
+                retain_highest_roi,
             )
             return
 
@@ -1562,10 +1570,12 @@ class MainWindow(QMainWindow):
         self._apply_single_auto_label_result(
             annotations,
             overlap_iou,
+            retain_highest_roi,
         )
 
     def _start_async_single_auto_label(
         self, img_path, conf, iou, overlap_iou, class_match_mode, imgsz, device,
+        retain_highest_roi=False,
     ) -> None:
         """Run single-image inference on a worker thread (slow backends).
 
@@ -1590,14 +1600,20 @@ class MainWindow(QMainWindow):
         self._single_worker = worker
         # Bind overlap_iou for the result slot without re-reading the panel.
         worker.done.connect(
-            lambda anns: self._on_single_auto_label_done(anns, overlap_iou)
+            lambda anns: self._on_single_auto_label_done(
+                anns, overlap_iou, retain_highest_roi,
+            )
         )
         worker.error.connect(self._on_single_auto_label_error)
         worker.finished.connect(self._on_single_auto_label_worker_finished)
         worker.start()
 
-    def _on_single_auto_label_done(self, annotations, overlap_iou: float) -> None:
-        self._apply_single_auto_label_result(annotations, overlap_iou)
+    def _on_single_auto_label_done(
+        self, annotations, overlap_iou: float, retain_highest_roi: bool = False,
+    ) -> None:
+        self._apply_single_auto_label_result(
+            annotations, overlap_iou, retain_highest_roi,
+        )
 
     def _on_single_auto_label_error(self, message: str) -> None:
         self._status_label.setText("自动标注失败")
@@ -1612,6 +1628,7 @@ class MainWindow(QMainWindow):
         self,
         annotations,
         overlap_iou: float,
+        retain_highest_roi: bool = False,
     ) -> None:
         """将单图自动标注结果加入画布，空结果时弹出提示。"""
 
@@ -1625,6 +1642,12 @@ class MainWindow(QMainWindow):
             else ""
         )
 
+        original_count = len(annotations)
+        annotations = retain_highest_confidence_roi(
+            annotations, retain_highest_roi,
+        )
+        roi_drop_count = original_count - len(annotations)
+
         if annotations:
             self._label_panel.add_auto_annotations(
                 annotations,
@@ -1632,6 +1655,7 @@ class MainWindow(QMainWindow):
             )
             self._status_label.setText(
                 f"自动标注完成：检测到 {len(annotations)} 个目标"
+                f"{f'，ROI 规则过滤 {roi_drop_count} 个' if roi_drop_count else ''}"
                 f"{drop_suffix}"
             )
             return
@@ -1721,6 +1745,10 @@ class MainWindow(QMainWindow):
         class_match_mode = self._model_panel.get_class_match_mode() if self._model_panel else "class_id"
         imgsz = self._model_panel.get_predict_imgsz() if self._model_panel else None
         device = self._model_panel.get_predict_device() if self._model_panel else None
+        self._batch_retain_highest_roi = (
+            self._model_panel.should_retain_highest_confidence_roi()
+            if self._model_panel else False
+        )
 
         self._batch_worker = BatchPredictWorker(
             predictor=self._model_ctrl.predictor,
@@ -1734,6 +1762,7 @@ class MainWindow(QMainWindow):
         )
         self._batch_skipped = 0
         self._batch_failed = 0
+        self._batch_roi_filtered = 0
         self._batch_worker.progress.connect(self._on_batch_progress)
         self._batch_worker.image_done.connect(self._on_batch_image_done)
         self._batch_worker.finished_ok.connect(self._on_batch_finished)
@@ -1780,6 +1809,12 @@ class MainWindow(QMainWindow):
                 self._batch_skipped += 1
             return
         annotations = payload
+        retain_highest_roi = getattr(self, "_batch_retain_highest_roi", False)
+        original_count = len(annotations)
+        annotations = retain_highest_confidence_roi(
+            annotations, retain_highest_roi,
+        )
+        self._batch_roi_filtered += original_count - len(annotations)
         label_path = self._project.label_path_for(img_path)
         ia = load_annotation(label_path)
         if ia is None:
@@ -1798,11 +1833,14 @@ class MainWindow(QMainWindow):
     def _on_batch_finished(self) -> None:
         skipped = getattr(self, "_batch_skipped", 0)
         failed = getattr(self, "_batch_failed", 0)
+        roi_filtered = getattr(self, "_batch_roi_filtered", 0)
         notes = []
         if skipped > 0:
             notes.append(f"跳过 {skipped} 张已确认")
         if failed > 0:
             notes.append(f"失败 {failed} 张未识别")
+        if roi_filtered > 0:
+            notes.append(f"ROI 规则过滤 {roi_filtered} 个框")
         if notes:
             self._status_label.setText("批量自动标注完成（" + "，".join(notes) + "）")
         else:
