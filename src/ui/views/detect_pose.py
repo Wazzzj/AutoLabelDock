@@ -27,7 +27,6 @@ from PyQt5.QtWidgets import (
     QMenu,
     QTreeWidget,
     QTreeWidgetItem,
-    QApplication,
 )
 
 from src.core.annotation import Annotation, ImageAnnotation, Keypoint
@@ -77,6 +76,8 @@ class DetectPoseView(TaskView):
         self._last_data_tree_item: QTreeWidgetItem | None = None
         self._obb_tool_active = False
         self._task_type = "detect"
+        self._switching_image = False
+        self._queued_image_path: Path | None = None
 
         self._init_ui()
         self._connect_signals()
@@ -691,15 +692,46 @@ class DetectPoseView(TaskView):
 
 
     def _on_image_selected(self, path: Path) -> None:
+        """Switch image and annotations as one non-reentrant UI transaction."""
+        path = Path(path)
+        if self._switching_image:
+            # Keep only the latest request. This protects against synchronous
+            # selection signals fired while status/filter state is refreshed.
+            self._queued_image_path = path
+            return
+
+        self._switching_image = True
+        try:
+            self._switch_to_image(path)
+        finally:
+            self._switching_image = False
+
+        queued_path = self._queued_image_path
+        self._queued_image_path = None
+        if queued_path is not None and queued_path != self._current_image_path:
+            self._on_image_selected(queued_path)
+
+    def _switch_to_image(self, path: Path) -> None:
         self._save_current()
+        self._canvas.cancel_interaction()
         self._current_image_path = path
 
         # Reassert the project tool capability whenever the canvas changes
         # image, so clearing/reloading the canvas cannot drop the OBB menu.
         self._canvas.set_obb_editing_enabled(self._task_type == "obb")
 
+        if self._project:
+            label_path = self._project.label_path_for(path)
+            ia = load_annotation(label_path)
+            if ia is None:
+                w, h = get_image_size(path)
+                ia = ImageAnnotation(
+                    image_path=path.name,
+                    image_size=(w, h),
+                )
+            self._current_annotation = ia
+
         self._canvas.set_loading(True)
-        QApplication.processEvents()
         try:
             pixmap = self._image_cache.get(path)
             if pixmap:
@@ -710,20 +742,7 @@ class DetectPoseView(TaskView):
             self._canvas.set_loading(False)
         logger.debug("Image selected: %s", path.name)
 
-        self._preload_neighbors(path)
-
-        if self._project:
-            label_path = self._project.label_path_for(path)
-            ia = load_annotation(label_path)
-            if ia:
-                self._current_annotation = ia
-            else:
-                w, h = get_image_size(path)
-                self._current_annotation = ImageAnnotation(
-                    image_path=path.name,
-                    image_size=(w, h),
-                )
-
+        if self._project and self._current_annotation is not None:
             self._canvas.set_annotations(list(self._current_annotation.annotations))
             self._ann_panel.set_annotations(list(self._current_annotation.annotations))
             self._ann_panel.set_image_user_tags(list(self._current_annotation.tags))
@@ -742,22 +761,6 @@ class DetectPoseView(TaskView):
             self._prev_annotations_snapshot = self._stats_snapshot(self._current_annotation.annotations)
 
         self.image_focus_changed.emit(path)
-
-    def _preload_neighbors(self, current: Path) -> None:
-        if not self._project:
-            return
-        images = self._project.list_images()
-        try:
-            idx = images.index(current)
-        except ValueError:
-            return
-        neighbors = []
-        for offset in [1, 2, -1]:
-            ni = idx + offset
-            if 0 <= ni < len(images):
-                neighbors.append(images[ni])
-        if neighbors:
-            self._image_cache.preload(neighbors)
 
     def _save_current(self) -> None:
         if not self._project or not self._current_image_path or not self._current_annotation:

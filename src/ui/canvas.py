@@ -219,6 +219,10 @@ class AnnotationCanvas(QWidget):
 
     def set_annotations(self, annotations: list[Annotation]) -> None:
         """Set the annotations to display."""
+        # Annotation replacement commonly accompanies an image switch or disk
+        # reload. Never let a drag started on the previous image continue and
+        # mutate the newly installed annotation list.
+        self.cancel_interaction()
         self._annotations = list(annotations)
         self._selected_id = None
         self._clear_polygon_edge_hover()
@@ -315,6 +319,27 @@ class AnnotationCanvas(QWidget):
         self._polygon_points = []
         self._clear_polygon_edge_hover()
         self.update()
+
+    def cancel_interaction(self) -> None:
+        """Cancel transient mouse interaction without changing annotations."""
+        self._drawing = False
+        self._draw_start = None
+        self._draw_current = None
+        self._mouse_pos = None
+        self._polygon_points = []
+        self._dragging = False
+        self._drag_type = ""
+        self._drag_ann_id = None
+        self._drag_kp_idx = -1
+        self._drag_start_norm = None
+        self._drag_ann_snapshot = None
+        self._panning = False
+        self._pan_start = None
+        self._clear_polygon_edge_hover()
+        if self.tool_mode == "select":
+            self._set_default_cursor()
+        else:
+            self._set_click_cursor()
 
     def clear(self) -> None:
         """Clear image and annotations."""
