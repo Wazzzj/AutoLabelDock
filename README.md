@@ -16,12 +16,14 @@ AutoLabel Dock 是基于 **PyQt5 + Ultralytics YOLO** 的跨平台桌面工具�
 
 ## 界面预览
 
-| 面板 | 截图 |
-|:---|:---:|
-| 标注：检测 / 分割 / 姿态 | ![标注界面](resources/screenshots/labeling.png) |
-| 分类 | ![分类界面](resources/screenshots/cls.png) |
-| LocateAnything | ![LocateAnything 界面](resources/screenshots/locateanything.png) |
-| 训练 | ![训练面板](resources/screenshots/train.png) |
+| 面板   |                    截图                     |
+|:-----|:-----------------------------------------:|
+| 检测   |  ![标注界面](resources/screenshots/det.png)   |
+| 分割   |  ![标注界面](resources/screenshots/seg.png)   |
+| 旋转框  |  ![标注界面](resources/screenshots/obb.png)   |
+| 姿态   |  ![标注界面](resources/screenshots/pose.png)  |
+| 分类   |  ![分类界面](resources/screenshots/cls.png)   |
+| 训练   | ![训练面板](resources/screenshots/train.png)  |
 | 模型管理 | ![模型管理](resources/screenshots/models.png) |
 
 ---
@@ -33,7 +35,7 @@ AutoLabel Dock 是基于 **PyQt5 + Ultralytics YOLO** 的跨平台桌面工具�
 - **目标检测 detect**：矩形框标注。
 - **实例分割 segment**：多边形标注，也可在训练导出时从矩形框退化生成矩形多边形。
 - **旋转框检测 obb**：拖动创建矩形后旋转到目标方向，支持四角联动缩放。
-- **关键点姿态 pose**：矩形框 + 关键点骨架标注，支持关键点模板。
+- **关键点姿态 pose**：矩形框 + 关键点骨架标注；COCO 17 点按人体拓扑连线，并区分可见、遮挡和不可见状态，支持关键点模板。
 - **图像分类 classify**：整图单标签标注，支持缩略图网格和数字键快速打标。
 
 ### 标注体验
@@ -51,7 +53,8 @@ AutoLabel Dock 是基于 **PyQt5 + Ultralytics YOLO** 的跨平台桌面工具�
 
 - 可按状态、类别、数据版本、Tag、尺寸、面积、置信度和中心位置组合筛选。
 - 百分比条件可跨分辨率复用；分类项目仅保留图片 Tag 条件。
-- 支持 ROI 与 OK / NG 卡控，并可导出当前或全部预览图。
+- 支持矩形、圆形和多边形 ROI，以及按类别配置的 OK / NG 卡控；ROI 仅用于预览分析，不写入标注或训练数据。
+- 可导出包含标注、面积、卡控结果和 ROI 的当前或全部预览图。
 
 ### 数据版本
 
@@ -62,7 +65,7 @@ AutoLabel Dock 是基于 **PyQt5 + Ultralytics YOLO** 的跨平台桌面工具�
 ### 模型辅助标注
 
 - 加载 YOLO 权重后，可对单张图片或批量图片进行预标注。
-- 可选每张图片只保留置信度最高的一个 ROI，并同步用于推理和自动标注。
+- 可选每张图片只保留置信度最高的一个预测 ROI，并同步用于模型推理、自动标注和批量标注。
 - 批量推理在后台线程运行，逐图落盘，可取消。
 - 新预测会和已有同类已确认标注按 IoU 匹配，避免重复框。
 - 自动标注默认为待确认；分类任务会保护已确认结果。
@@ -75,15 +78,22 @@ AutoLabel Dock 是基于 **PyQt5 + Ultralytics YOLO** 的跨平台桌面工具�
 ### 训练闭环
 
 - 一键准备五类 YOLO 任务的数据集，支持分层抽样、训练模板和完整超参数。
+- Freeze 等训练参数在面板中直接配置，不再内置模型结构查看器。
 - 数据增强预览覆盖几何、颜色、Mosaic、MixUp、Copy-Paste 等策略。
 - 训练在独立子进程运行，可取消并实时显示指标。
 - 训练完成后自动保存、注册并加载最佳模型。
 
 ### 模型管理
 
-- 支持训练模型和外部 `.pt` 权重的加载、重命名、删除与指标对比。
+- 支持训练模型和外部 `.pt` / `.onnx` 权重的导入、加载、重命名、删除与指标对比。
+- 支持导出 PT，以及将 PT 模型转换并导出为 ONNX。
 - 可对单图或目录推理，目录结果保存到 `model_predictions/`。
 - YOLO 与 LocateAnything 会协调 GPU 占用。
+
+### 小工具
+
+- 内置可编辑的 Python 脚本运行器，支持保存自定义工具、查看实时输出和停止执行。
+- 自带按标注框裁剪图片脚本，可按数据版本处理项目图片。
 
 ### 导入 / 导出
 
@@ -264,6 +274,18 @@ resume: false
 
 在“文件 → 选择图片目录…”中可为当前项目切换本地或外部图片目录，快捷键为 `Ctrl+Shift+O`。该操作只更新 `project.json` 中的图片目录索引，不复制、移动或删除原图片；切换后标注、预览、数据版本和训练筛选会立即刷新。
 
+### 通用
+
+| 快捷键 | 功能 |
+|:---|:---|
+| `Ctrl+N` / `Ctrl+O` | 新建 / 打开项目 |
+| `Ctrl+Shift+O` | 切换项目图片目录 |
+| `Ctrl+E` / `Ctrl+I` | 导出 / 导入标注 |
+| `Ctrl+S` | 保存当前标注 |
+| `Shift+A` / `Ctrl+Shift+A` | 自动标注当前图片 / 批量标注 |
+| `T` | 将选中的 Tag 应用到选中图片 |
+| `F5` | 重新扫描项目图片 |
+
 ### 检测 / 分割 / 姿态
 
 | 快捷键 | 功能 |
@@ -302,7 +324,7 @@ resume: false
 
 - Python >= 3.10
 - 操作系统：Linux / macOS / Windows
-- 核心依赖：PyQt5、Ultralytics、pyqtgraph、PyYAML、packaging
+- 核心依赖：PyQt5、Ultralytics、ONNX Runtime、pyqtgraph、PyYAML、packaging
 
 训练和推理可使用 CPU，但实际训练建议使用 NVIDIA GPU。LocateAnything-3B 后端必须使用 NVIDIA GPU。
 
@@ -340,7 +362,7 @@ Windows 下如遇到中文输出乱码，优先使用 Windows Terminal / PowerSh
 
 ## 模型权重
 
-预训练权重位于 `pretrained_models/`。也可在模型面板导入外部 `.pt` 文件；训练产物会自动注册。
+预训练权重位于 `pretrained_models/`。也可在模型面板导入外部 `.pt` / `.onnx` 文件；训练产物会自动注册，PT 模型可进一步导出为 ONNX。
 
 ---
 

@@ -26,6 +26,11 @@ from PyQt5.QtWidgets import (
 )
 
 from src.core.label_io import load_annotation
+from src.core.annotation import (
+    POSE_BOUNDING_BOX_RGB,
+    keypoint_display_rgb,
+    keypoint_skeleton_colored_segments,
+)
 from src.ui.icons import icon
 from src.ui.theme import PALETTE, set_button_role, text_style
 
@@ -346,10 +351,34 @@ def _load_frame(path: Path, project=None) -> _PreviewFrame | None:
                     cx, cy, bw, bh = ann.bbox
                     p1 = (round((cx - bw / 2) * w), round((cy - bh / 2) * h))
                     p2 = (round((cx + bw / 2) * w), round((cy + bh / 2) * h))
-                    cv2.rectangle(overlay, p1, p2, rgba, thickness, cv2.LINE_AA)
-                for kp in ann.keypoints:
+                    bbox_rgba = (*POSE_BOUNDING_BOX_RGB, 255) if ann.keypoints else rgba
+                    cv2.rectangle(overlay, p1, p2, bbox_rgba, thickness, cv2.LINE_AA)
+                fallback_rgb = rgba[:3]
+                for start, end, rgb in keypoint_skeleton_colored_segments(
+                    ann.keypoints, fallback_rgb
+                ):
+                    start_point = (
+                        round(start.x * (w - 1)),
+                        round(start.y * (h - 1)),
+                    )
+                    end_point = (
+                        round(end.x * (w - 1)),
+                        round(end.y * (h - 1)),
+                    )
+                    cv2.line(
+                        overlay,
+                        start_point,
+                        end_point,
+                        (*rgb, 235),
+                        thickness,
+                        cv2.LINE_AA,
+                    )
+                for index, kp in enumerate(ann.keypoints):
                     center = (round(kp.x * (w - 1)), round(kp.y * (h - 1)))
-                    cv2.circle(overlay, center, thickness + 2, rgba, -1, cv2.LINE_AA)
+                    point_rgb = keypoint_display_rgb(ann.keypoints, index, fallback_rgb)
+                    cv2.circle(
+                        overlay, center, thickness + 2, (*point_rgb, 235), -1, cv2.LINE_AA
+                    )
     return _PreviewFrame(image, overlay, masks, count)
 
 

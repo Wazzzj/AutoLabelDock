@@ -24,7 +24,14 @@ from PyQt5.QtGui import (
 )
 from PyQt5.QtSvg import QSvgRenderer
 
-from src.core.annotation import Annotation, Keypoint, annotation_display_label
+from src.core.annotation import (
+    Annotation,
+    Keypoint,
+    POSE_BOUNDING_BOX_RGB,
+    annotation_display_label,
+    keypoint_display_rgb,
+    keypoint_skeleton_colored_segments,
+)
 from src.core.resources import LOADING_SVG
 from src.ui.icons import icon
 from src.ui.theme import PALETTE
@@ -601,12 +608,14 @@ class AnnotationCanvas(QWidget):
             cx, cy, w, h = ann.bbox
             x1, y1 = self.norm_to_pixel(cx - w / 2, cy - h / 2)
             x2, y2 = self.norm_to_pixel(cx + w / 2, cy + h / 2)
+            bbox_color = QColor(*POSE_BOUNDING_BOX_RGB) if ann.keypoints else color
 
             if in_conflict and not ann.confirmed:
                 # Conflict prediction: teal dashed, thicker
-                pen = QPen(QColor(PALETTE["teal"]), 3, Qt.DashLine)
+                conflict_color = bbox_color if ann.keypoints else QColor(PALETTE["teal"])
+                pen = QPen(conflict_color, 3, Qt.DashLine)
             else:
-                pen = QPen(color, 2)
+                pen = QPen(bbox_color, 2)
                 if not ann.confirmed:
                     pen.setStyle(Qt.DashLine)
             if selected:
@@ -623,21 +632,40 @@ class AnnotationCanvas(QWidget):
             if selected:
                 self._paint_handles(painter, x1, y1, x2, y2)
 
+        # Pose skeleton is painted first so keypoint circles stay visible on top.
+        if ann.keypoints:
+            painter.setBrush(Qt.NoBrush)
+            fallback_rgb = (color.red(), color.green(), color.blue())
+            for start, end, rgb in keypoint_skeleton_colored_segments(
+                ann.keypoints, fallback_rgb
+            ):
+                skeleton_pen = QPen(QColor(*rgb), 2 + (1 if selected else 0))
+                skeleton_pen.setCapStyle(Qt.RoundCap)
+                painter.setPen(skeleton_pen)
+                painter.drawLine(
+                    QPointF(*self.norm_to_pixel(start.x, start.y)),
+                    QPointF(*self.norm_to_pixel(end.x, end.y)),
+                )
+
         # Keypoints
         for i, kp in enumerate(ann.keypoints):
             px, py = self.norm_to_pixel(kp.x, kp.y)
             is_kp_selected = selected and self._selected_kp_idx == i
             r = KEYPOINT_RADIUS + (3 if is_kp_selected else (2 if selected else 0))
+            point_rgb = keypoint_display_rgb(
+                ann.keypoints, i, (color.red(), color.green(), color.blue())
+            )
+            point_color = QColor(*point_rgb)
 
             if kp.visible == 0:
                 painter.setPen(QPen(QColor(PALETTE["text_subtle"]), 1))
                 painter.setBrush(Qt.NoBrush)
             elif kp.visible == 1:
-                painter.setPen(QPen(color, 1))
+                painter.setPen(QPen(point_color, 1))
                 painter.setBrush(Qt.NoBrush)
             else:
-                painter.setPen(QPen(color, 1))
-                painter.setBrush(QBrush(color))
+                painter.setPen(QPen(point_color, 1))
+                painter.setBrush(QBrush(point_color))
 
             if is_kp_selected:
                 painter.setPen(QPen(QColor(PALETTE["text"]), 2))

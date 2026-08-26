@@ -89,6 +89,66 @@ class Annotation:
             kp.clamp()
 
 
+# Official Ultralytics/COCO 17-keypoint human-pose topology, converted to
+# zero-based indexes. Custom pose templates without 17 points fall back to
+# connecting adjacent points in their stored order.
+COCO17_SKELETON_EDGES: tuple[tuple[int, int], ...] = (
+    (15, 13), (13, 11), (16, 14), (14, 12), (11, 12),
+    (5, 11), (6, 12), (5, 6), (5, 7), (6, 8),
+    (7, 9), (8, 10), (1, 2), (0, 1), (0, 2),
+    (1, 3), (2, 4), (3, 5), (4, 6),
+)
+
+# Official documentation artwork colors for COCO 17-point poses: fluorescent
+# yellow-green limbs and vivid magenta keypoints.
+COCO17_SKELETON_RGB = (224, 255, 41)
+COCO17_KEYPOINT_RGB = (254, 100, 218)
+POSE_BOUNDING_BOX_RGB = (124, 92, 255)
+
+
+def _keypoint_skeleton_edges(count: int) -> tuple[tuple[int, int], ...]:
+    if count == 17:
+        return COCO17_SKELETON_EDGES
+    return tuple((index, index + 1) for index in range(max(0, count - 1)))
+
+
+def keypoint_skeleton_segments(
+    keypoints: list[Keypoint],
+) -> list[tuple[Keypoint, Keypoint]]:
+    """Return visible keypoint pairs that should be drawn as pose limbs."""
+    return [
+        (keypoints[start], keypoints[end])
+        for start, end in _keypoint_skeleton_edges(len(keypoints))
+        if keypoints[start].visible > 0 and keypoints[end].visible > 0
+    ]
+
+
+def keypoint_skeleton_colored_segments(
+    keypoints: list[Keypoint],
+    fallback_rgb: tuple[int, int, int],
+) -> list[tuple[Keypoint, Keypoint, tuple[int, int, int]]]:
+    """Return visible pose limbs with official COCO or fallback RGB colors."""
+    use_official_colors = len(keypoints) == 17
+    segments = []
+    for start, end in _keypoint_skeleton_edges(len(keypoints)):
+        if keypoints[start].visible == 0 or keypoints[end].visible == 0:
+            continue
+        rgb = COCO17_SKELETON_RGB if use_official_colors else fallback_rgb
+        segments.append((keypoints[start], keypoints[end], rgb))
+    return segments
+
+
+def keypoint_display_rgb(
+    keypoints: list[Keypoint],
+    index: int,
+    fallback_rgb: tuple[int, int, int],
+) -> tuple[int, int, int]:
+    """Return the official COCO keypoint RGB color when the pose has 17 points."""
+    if len(keypoints) == 17 and 0 <= index < 17:
+        return COCO17_KEYPOINT_RGB
+    return fallback_rgb
+
+
 def annotation_geometry(
     annotation: Annotation,
 ) -> tuple[float, float, float, float, float] | None:

@@ -1,18 +1,14 @@
 # AutoLabel Dock
 
-> Label a few, train a round, auto-label the rest — a desktop image-annotation and YOLO-training iteration loop.
+> Label a little, train a version, then auto-label again: a desktop image annotation tool built around the YOLO training loop.
 
 ![Python](https://badgen.net/badge/Python/%E2%89%A53.10/blue)
 ![License](https://badgen.net/badge/License/AGPL--3.0/green)
 ![Qt](https://badgen.net/badge/Qt/PyQt5/41cd52)
 
-**English** | [简体中文](README.md)
+[简体中文](README.md) | **English**
 
-AutoLabel Dock is a desktop image-annotation tool built on **PyQt5 + Ultralytics YOLOv8**. It runs cross-platform on Linux / macOS / Windows.
-
-It turns "annotation" and "training" into a single closed loop: label a batch of images manually (or with help from an existing model), confirm the results, train a custom YOLO model in one click, then use the new model to auto-label the rest of your data — every iteration leaves fewer boxes to fix by hand.
-
-> Note: the application UI is currently Chinese-only; this English README documents the project for international users.
+AutoLabel Dock is a cross-platform desktop tool built with **PyQt5 + Ultralytics YOLO**, covering manual annotation, model-assisted pre-annotation, dataset preparation, training, and iterative labeling.
 
 ![AutoLabel Dock](resources/screenshots/overall.png)
 
@@ -22,200 +18,321 @@ It turns "annotation" and "training" into a single closed loop: label a batch of
 
 | Panel | Screenshot |
 |:---|:---:|
-| Annotation (detect/pose) | ![Annotation UI](resources/screenshots/labeling.png) |
+| Detection | ![Detection UI](resources/screenshots/det.png) |
+| Segmentation | ![Segmentation UI](resources/screenshots/seg.png) |
+| Oriented bounding boxes | ![OBB UI](resources/screenshots/obb.png) |
+| Pose | ![Pose UI](resources/screenshots/pose.png) |
 | Classification | ![Classification UI](resources/screenshots/cls.png) |
-| LocateAnything | ![LA UI](resources/screenshots/locateanything.png) |
-| Training panel | ![Training panel](resources/screenshots/train.png) |
+| Training | ![Training panel](resources/screenshots/train.png) |
 | Model management | ![Model management](resources/screenshots/models.png) |
 
 ---
 
-## Features
+## Main Features
 
-### 🔍 Five annotation tasks
+### Annotation Tasks
 
-- **Object detection (detect)**: bounding-box (bbox) annotation
-- **Instance segmentation (segment)**: editable polygon annotation
-- **Oriented bounding boxes (obb)**: drag-to-create rotated boxes with rotation and rectangle-preserving corner resize
-- **Keypoint pose (pose)**: bbox + skeleton keypoints
-- **Image classification (classify)**: single label per image, with a grid selector and `1`–`9` hotkeys for quick labeling that auto-advances to the next image
+- **Object detection (`detect`)**: bounding-box annotation.
+- **Instance segmentation (`segment`)**: polygon annotation; bounding boxes can also be converted to rectangular polygons during training export.
+- **Oriented bounding boxes (`obb`)**: drag to create a rectangle, rotate it toward the target, and resize it from linked corners.
+- **Keypoint pose (`pose`)**: bounding box + keypoint skeleton annotation. COCO 17-point poses use the human-body topology, distinguish visible, occluded, and invisible states, and support keypoint templates.
+- **Image classification (`classify`)**: one label per image, with a thumbnail grid and number-key shortcuts for rapid labeling.
 
-### ✏️ Annotation experience
+### Annotation Experience
 
-- Keyboard-centric workflow similar to LabelImg
-- Smooth canvas: bbox, polygon, four-corner OBB, and keypoint drawing with drag-to-move/resize, scroll-wheel zoom and pan
-- Detection boxes, OBBs, and segmentation polygons show class plus area percentage and pixel area on the annotation canvas and large preview; thumbnails show class plus area percentage. Bboxes use width × height, while OBB and segmentation use true polygon area.
-- Per-image undo stack (depth 50), auto-save on image switch, LRU image cache
-- File list color-coded by status (confirmed / pending / unlabeled), with drag-and-drop image import, combined status + class + tag filtering, and right-click batch operations
-- Changing a class while multiple images are checked or selected replaces matching annotations of the current old class across all selected images.
-- Deleting the current image keeps the list near the same position and focuses the next image (or the previous one at the end). Pending-box drags repaint only the canvas until mouse release to avoid panel-sync stalls.
-- The project `model_predictions/` folder is excluded from annotation image scans and folder trees, so saved inference outputs are not treated as labeling data
+- A keyboard-oriented workflow similar to LabelImg.
+- Draw, select, move, resize, zoom, and pan on the canvas; edit boxes, keypoints, and polygons.
+- Annotation labels include class and area information; OBB and segmentation areas use the true polygon area.
+- Per-image undo / redo, auto-save when switching images, and image caching.
+- Image states are clearly separated into unlabeled, pending, and confirmed.
+- Drag-and-drop import plus batch confirmation, deletion, moving, and class changes.
+- Combined filtering by status, class, and custom Tags.
+- Catppuccin Mocha dark theme.
 
-### 🔎 Preview and advanced filters
+### Data Preview and Advanced Filters
 
-- Combine annotation status, class, data version, and advanced filters in the preview grid.
-- Advanced filters include image Tags plus min/max ranges for width, height, area, confidence, and center X/Y, with one-click reset.
-- Width, height, and center coordinates are percentages of image dimensions; area is a percentage of image area, so one threshold works across resolutions.
-- Class and all enabled numeric constraints must match the same annotation. Editing a range automatically enables it; unchecked ranges do not participate.
-- Classification projects keep Tag filtering while object geometry filters are disabled.
-- The large-preview toolbar exports the current image as a full-resolution PNG containing boxes or contours, class and area labels, control styling, the OK/NG result, and ROI overlays.
-- **File → Export all preview images...** exports every project preview as `*_preview.png` while preserving data-version and image subdirectories. Exporting into the project image directory is blocked so rendered previews cannot be mistaken for training images.
-- Catppuccin Mocha dark theme
+- Combine status, class, data version, Tag, size, area, confidence, and center-position filters.
+- Percentage-based conditions work across image resolutions; classification projects retain image Tag filtering only.
+- Rectangle, ellipse, and polygon ROIs plus per-class OK / NG control rules. ROIs are used only for preview analysis and are not written to annotations or training data.
+- Export the current preview or all previews with annotations, area, control results, and ROI overlays.
 
-<details>
-<summary><b>Keyboard shortcuts</b></summary>
+### Data Versions
 
-**Tools & modes**
+- Create, rename, and remove data versions, and move images with their labels between versions.
+- Removing a version only removes its index and does not delete files from disk; recreating a version with the same name restores access.
+- Training and batch labeling can be scoped by data version, status, class, and Tag.
 
-| Shortcut | Function |
-|:---|:---|
-| `W` | Box drawing mode |
-| `P` | Polygon drawing mode |
-| `O` | OBB drag drawing mode; use the outside handle to rotate |
-| `K` | Keypoint mode |
-| `V` | Select/move mode |
+### Model-Assisted Annotation
 
-**Navigation**
+- Load YOLO weights to pre-annotate one image or a batch of images.
+- Optionally keep only the highest-confidence predicted ROI in each image; the same rule applies to model inference, automatic annotation, and batch annotation.
+- Batch inference runs in a background thread, saves each image incrementally, and can be canceled.
+- New predictions are matched against confirmed same-class annotations by IoU to avoid duplicate boxes.
+- Automatic annotations start as pending; classification tasks preserve confirmed results.
+- Optionally connect LocateAnything-3B to generate detection boxes from natural-language target descriptions.
 
-| Shortcut | Function |
-|:---|:---|
-| `A` / `←` | Previous image (auto-saves current) |
-| `D` / `→` | Next image (auto-saves current) |
+### Tag System
 
-**Annotation operations**
+- Image-level custom Tags are independent of classification labels. They support batch assignment, include / exclude filters, AND / OR combinations, and training-data filtering.
 
-| Shortcut | Function |
-|:---|:---|
-| `Space` | Confirm selected annotation |
-| `Delete` | Delete selected annotation |
-| `Ctrl+Z` / `Ctrl+Y` | Undo / Redo |
-| `Ctrl+C` / `Ctrl+V` | Copy / paste annotations |
-| `Ctrl+S` | Save |
+### Training Loop
 
-**View**
+- One-click dataset preparation for all five YOLO tasks, with stratified sampling, training templates, and full hyperparameter control.
+- Configure Freeze and other training parameters directly in the panel; the model-structure viewer is no longer included.
+- Augmentation preview covers geometry, color, Mosaic, MixUp, Copy-Paste, and related policies.
+- Training runs in an isolated subprocess, can be canceled, and displays metrics in real time.
+- The best model is saved, registered, and loaded automatically when training completes.
 
-| Shortcut | Function |
-|:---|:---|
-| `Ctrl+Shift+O` | Select a local or external image directory for the current project without copying or moving files |
-| `Ctrl++` / `Ctrl+-` | Zoom in / out |
-| `Ctrl+0` | Fit to window |
-| `F5` | Rescan image directory |
+### Model Management
 
-**File → Select Image Directory…** persists the selected path in `project.json`, resets stale data-version selections, and immediately refreshes annotation, preview, and training views. Existing files in both the old and new directories remain untouched.
+- Import, load, rename, delete, and compare metrics for trained models and external `.pt` / `.onnx` weights.
+- Export PT models, or convert a PT model and export it as ONNX.
+- Run inference on one image or a directory; directory results are saved under `model_predictions/`.
+- YOLO and LocateAnything coordinate GPU usage.
 
-**Classification only**
+### Utilities
 
-| Shortcut | Function |
-|:---|:---|
-| `1`–`9` | Quick-select class label |
-| `Space` | Confirm the current or selected images |
-| `Backspace` | Clear the class label from selected images |
-| `Delete` | Delete selected images and their app annotations after confirmation |
-| `Ctrl+A` | Select all images in the current filtered result |
+- An editable Python script runner supports saving custom tools, viewing live output, and stopping execution.
+- A built-in crop-by-annotation-box script can process project images by data version.
 
-The classification annotation page uses a dataset-oriented workspace: class buttons and per-class image counts sit above the thumbnail grid, while the batch toolbar shows total, visible, labeled, and selected counts. It provides select-all-visible, invert, clear-selection, clear-class, and batch-delete actions. Use `Ctrl` or `Shift` to select multiple images, then click a class button to reclassify them together; deletion always requires confirmation.
-
-</details>
-
-### 🤖 Model-assisted auto-labeling
-
-- Load any YOLO weights to pre-label a single image or a batch (batches run on a background thread and save to disk image by image)
-- Conflict detection: predictions are matched against existing confirmed same-class annotations by IoU to avoid duplicate boxes
-- Confirmation lifecycle: auto-labels start as "pending" (dashed boxes); any manual edit marks them confirmed; once every box on an image is confirmed, the canvas locks to prevent accidental edits
-- Optional LocateAnything-3B text-labeling backend lets you describe targets in natural language (see [Optional: LocateAnything Text Labeling](#optional-locateanything-text-labeling))
-
-### 🏷️ Tag subsystem
-
-- Attach custom tags to images (independent of classification labels) for dataset organization
-- Tri-state filter chips (none → include → exclude), with AND/OR combination when multiple include tags are selected
-- Select multiple images and press `T` to tag them in bulk
-- The same tag filter can scope the training subset at train time
-
-### 🔄 Training loop
-
-- One-click dataset preparation: stratified train/val split by primary class, zero-copy via symlinks (with automatic fallback on Windows — see [Platform Notes](#platform-notes))
-- Filter training data by all versions or one selected data version, together with status, class, and Tag constraints
-- YOLO training for detect, segment, obb, pose, and classify projects
-- Training runs in an isolated child process so CUDA, DataLoader, or native-library failures cannot terminate the annotation UI; completed model files are recovered and registered when possible
-- Training presets plus full hyperparameter control; live loss / mAP curves; cancellable mid-run
-- Augmentation previews compare single-image transforms with full training samples, including transformed annotation overlays, Mosaic, MixUp, Copy-Paste, classification policies, and Erasing
-- On completion the model is auto-registered to the model library and auto-loaded, ready for inference immediately
-
-### 📦 Model management
-
-- Model library: training outputs are registered automatically; import external weights, rename, and delete are supported
-- The model panel can run native inference on a single image or a directory; directory results are saved to the project `model_predictions/` folder
-- Multi-model metric comparison dialog
-
-### 📥 Data import / export
+### Import / Export
 
 | Format | Export | Import | Applicable tasks |
 |:---|:---:|:---:|:---|
-| YOLO (txt) | ✅ | ✅ | Detection / Segmentation / OBB / Pose |
-| roLabelImg OBB (xml) | ✅ | ✅ | OBB |
-| COCO (json) | ✅ | ✅ | Detection / Pose |
-| labelme (json) | ✅ | ✅ | Detection / Pose |
-| X-AnyLabeling Detect (json) | ✅ | ✅ | Detection |
-| X-AnyLabeling OBB (json) | ✅ | ✅ | OBB |
-| iSAT (json) | ✅ | ✅ | Detection / Segmentation |
-| ImageFolder | ✅ | ✅ | Classification (folder-per-class) |
-| CSV | ✅ | ❌ | Classification |
+| YOLO txt | Supported | Supported | Detection / Segmentation / OBB / Pose |
+| roLabelImg OBB xml | Supported | Supported | OBB |
+| COCO json | Supported | Supported | Detection / Segmentation / Pose |
+| labelme json | Supported | Supported | Detection / Segmentation / Pose |
+| X-AnyLabeling Detect json | Supported | Supported | Detection |
+| X-AnyLabeling OBB json | Supported | Supported | OBB |
+| iSAT json | Supported | Supported | Detection / Segmentation |
+| ImageFolder | Supported | Supported | Classification |
+| CSV | Supported | Not supported | Classification |
 
-Exports automatically use the conventional layout for each target format:
+Exports use each format's conventional directory layout and preserve image subdirectories. OBB projects support YOLO four-point labels, roLabelImg XML, and X-AnyLabeling JSON, and can discover unconverted sidecar annotations automatically.
 
-| Export format | Output layout |
-|:---|:---|
-| labelme / X-AnyLabeling Detect / X-AnyLabeling OBB / iSAT | Each image is placed beside its same-stem JSON |
-| roLabelImg OBB | Each image is placed beside its same-stem XML |
-| YOLO | Separate `images/` and `labels/` trees plus `data.yaml` |
-| COCO | Separate `images/` and `annotations/coco.json` |
-| ImageFolder | Images are placed directly in class directories; no extra `images/` or `labels/` tree |
+### Data Safety
 
-iSAT export mirrors image subdirectories and places each image beside its same-stem JSON with standard `info`, `objects`, pixel-space `segmentation`, `bbox`, `area`, `group`, and `layer` fields. Polygon contours are preserved; bbox-only annotations are converted to four-point polygons, and confirmed-only export is supported.
-
-For regular X-AnyLabeling object-detection annotations, use `X-AnyLabeling Detect (json)` in a `detect` project. Import accepts both two-point and four-point `shape_type: "rectangle"` shapes, converting four corners to their axis-aligned enclosing box. You may select either the JSON directory or a dataset root containing a `jsons/` subdirectory. Empty annotation files are ignored; the matching images must already be present in the project. Export writes X-AnyLabeling four-point rectangles and preserves the class, confidence, and image dimensions.
-
-OBB projects use the normalized Ultralytics format `class_id x1 y1 x2 y2 x3 y3 x4 y4`. Set the project task to `obb` before importing nine-column YOLO labels so they are not mistaken for a small pose layout. `classes.txt` accepts both one class name per line and indexed entries such as `0:label`.
-
-OBB import/export is split into two explicit formats. roLabelImg XML stores `robndbox` values (`cx`, `cy`, `w`, `h`, and a radian `angle`); X-AnyLabeling JSON stores four pixel-coordinate points with `shape_type: "rotation"` and a radian `direction`. Both formats preserve image subdirectories and export each image beside its same-stem annotation file.
-
-Press `O` or choose **Oriented box** from the canvas context menu, then hold the left mouse button and drag out a rectangle. Select the box and drag the circular handle outside its top edge to rotate the complete box around its center; dragging a corner resizes it like a regular box while preserving a true rectangle.
-
-When an OBB project is created or reopened, same-stem XML/TXT sidecars in the project root, image directory, or common annotation directories are converted automatically if the internal `labels/*.json` file is still missing. The format matching the most unlabeled images is selected, XML wins ties, and existing internal labels are never overwritten.
-
-### 🛡️ Data safety
-
-- **Automatic backups**: destructive operations such as export and class changes snapshot to the in-project `.backups/` first, keeping the latest 20; a safety backup is also taken before any restore
-- **Independent storage**: annotations are stored as one JSON file per image, so a single corrupt file doesn't affect the rest
-- **Global config**: recent projects, window geometry, thresholds, training templates, etc. are stored under the repository `config/` folder
+- Annotations are stored as one JSON file per image.
+- Automatic backups are written to `.backups/` before high-risk operations; the latest 20 are retained by default.
+- Global configuration is stored in `config/`, and runtime logs are stored in `logs/`.
 
 ---
 
 ## Quick Start
 
-```
-1. Create project  →  2. Import images  →  3. Annotate  →  4. Confirm  →  5. Train  →  6. Iterate ↻
+```text
+1. Create project -> 2. Import images -> 3. Annotate / pre-annotate -> 4. Confirm -> 5. Train -> 6. Iterate
 ```
 
-1. **Create a project**: pick detect, segment, obb, pose, or classify, specify the project directory (the project will automatically scan and load `images/labels`), or leave it blank and drag images in later
-2. **Import images**: drag images onto the file list (you can also add images to the project's `images/` directory later and press `F5` to refresh)
-3. **Annotate**: draw manually; or load a YOLO weight to pre-label automatically; or use the LocateAnything text-labeling backend to describe targets in natural language (see [Optional: LocateAnything Text Labeling](#optional-locateanything-text-labeling))
-4. **Confirm**: review auto-labels image by image — editing confirms them
-5. **Train**: prepare the dataset and start training in one click, watching the curves live
-6. **Iterate**: the freshly trained model auto-loads, ready to auto-label the remaining images
+1. Create a project: choose `detect`, `segment`, `obb`, `pose`, or `classify`, then enter the project directory and initial classes.
+2. Import images: drag images into the file list, or add images / image directories from the data-folder menu.
+3. Annotate: draw boxes or polygons, drag and rotate OBBs, place keypoints, or select classification labels. You can also load YOLO weights for automatic pre-annotation.
+4. Confirm: review automatic annotations, correct them, and confirm the result.
+5. Train: select the base model, template, and hyperparameters in the Training panel, prepare the dataset, and start training.
+6. Iterate: use the newly trained model to continue labeling unfinished images.
+
+---
+
+## Fine-Contour Instance Segmentation Parameters
+
+The following configuration is intended for `segment` projects with a fixed camera, one ring-shaped target, and measurements that require both inner and outer contours, such as area, perimeter, and adhesive width. A two-stage fine-tuning workflow is recommended; use the first stage's `best.pt` as the base model for the second stage.
+
+If the example dataset contains only one `item` class, enable `single_cls`. Before training, make sure that:
+
+- Only manually reviewed and confirmed polygon annotations are used.
+- The training and validation sets do not contain the same physical object or adjacent duplicate frames.
+- `train` and `val` do not point to the same image directory.
+- Self-intersecting contours are corrected and inner holes in adhesive rings are preserved correctly.
+- High-resolution source images are used for precision measurements; increasing `imgsz` cannot restore details missing from the source image.
+
+### Stage 1: Freeze the Backbone
+
+Enter the following parameters in the Training panel:
+
+```yaml
+task: segment
+model: yolo26m-seg.pt
+epochs: 40
+batch: 4
+imgsz: 1024
+device: "0"
+freeze: 10
+workers: 4
+patience: 15
+val_ratio: 0.25
+
+optimizer: AdamW
+lr0: 0.001
+lrf: 0.01
+momentum: 0.937
+weight_decay: 0.0005
+warmup_epochs: 3.0
+warmup_momentum: 0.8
+warmup_bias_lr: 0.1
+
+hsv_h: 0.0
+hsv_s: 0.1
+hsv_v: 0.2
+degrees: 2.0
+translate: 0.03
+scale: 0.10
+shear: 0.0
+perspective: 0.0
+flipud: 0.5
+fliplr: 0.5
+mosaic: 0.0
+mixup: 0.0
+
+mask_ratio: 2
+overlap_mask: true
+copy_paste: 0.0
+copy_paste_mode: flip
+
+single_cls: true
+resume: false
+```
+
+### Stage 2: Fine-Tune the Full Model at a Low Learning Rate
+
+Select the `best.pt` produced by stage 1, clear the fixed Freeze value, enable **Use default value**, and configure the remaining parameters as follows:
+
+```yaml
+task: segment
+model: path/to/stage1/weights/best.pt
+epochs: 120
+batch: 4
+imgsz: 1024
+device: "0"
+freeze: null
+workers: 4
+patience: 25
+val_ratio: 0.25
+
+optimizer: AdamW
+lr0: 0.0003
+lrf: 0.01
+momentum: 0.937
+weight_decay: 0.0005
+warmup_epochs: 2.0
+warmup_momentum: 0.8
+warmup_bias_lr: 0.1
+
+hsv_h: 0.0
+hsv_s: 0.1
+hsv_v: 0.2
+degrees: 2.0
+translate: 0.03
+scale: 0.10
+shear: 0.0
+perspective: 0.0
+flipud: 0.5
+fliplr: 0.5
+mosaic: 0.0
+mixup: 0.0
+
+mask_ratio: 2
+overlap_mask: true
+copy_paste: 0.0
+copy_paste_mode: flip
+
+single_cls: true
+resume: false
+```
+
+Parameter notes:
+
+| Parameter | Recommendation and rationale |
+|:---|:---|
+| `model` | Prefer `yolo26m-seg.pt`; use `yolo26s-seg.pt` when VRAM is limited. Avoid starting with an x-size model on a very small dataset. |
+| `batch` | Use the largest value that does not exhaust VRAM. At `1024`, try 4, then 2, then 1; do not lower `imgsz` as the first solution. |
+| `mask_ratio` | `2` preserves finer training masks than the default `4`. If VRAM allows, compare `1` separately without changing other parameters at the same time. |
+| `mosaic` | Disable it. The target occupies most of the image, and Mosaic would shrink it and introduce unrealistic seams. |
+| `mixup` | Disable it. Image blending creates translucent boundaries that do not exist in the real data. |
+| `copy_paste` | Disable it. A single adhesive ring at a fixed position is not suitable for pasting extra instances. |
+| `degrees` / `translate` / `scale` | Use only light geometric augmentation to avoid interpolation and cropping damage along fine edges. |
+| `flipud` / `fliplr` | Use `0.5` only when object orientation, lighting direction, and defect location have no directional meaning; otherwise set both to `0.0`. |
+| `overlap_mask` | Keep `true` for single-instance images; it does not fix self-intersecting polygons. |
+| `single_cls` | Enable it only while the project always contains one target class. Disable it before adding more classes. |
+
+Classification-only parameters (`erasing`, `auto_augment`, and `dropout`) and pose-only parameters (`pose`, `kobj`, and `kpt_shape`) are not passed to Ultralytics during `segment` training and can remain at their defaults.
+
+### Inference and Contour Measurement
+
+- Use the same `imgsz=1024` for training and inference.
+- Keep `retina_masks=True` during inference and prefer the binary masks in `result.masks.data`.
+- For precision contour calculations, use `cv2.RETR_CCOMP` to preserve holes and `cv2.CHAIN_APPROX_NONE` to retain every edge point.
+- Do not calculate perimeter or adhesive width directly from polygons heavily simplified with `approxPolyDP`.
+- In addition to regular mask mAP, consider Boundary IoU, HD95, area error, perimeter error, and adhesive-width error.
+- Physical measurements also require camera calibration to convert pixel coordinates to real-world units.
+
+See the [Ultralytics training configuration](https://docs.ultralytics.com/modes/train), [instance segmentation documentation](https://docs.ultralytics.com/tasks/segment), and [data augmentation guide](https://docs.ultralytics.com/guides/yolo-data-augmentation) for related parameters.
+
+---
+
+## Keyboard Shortcuts
+
+Use **File → Select Image Directory...** or `Ctrl+Shift+O` to switch the current project to a local or external image directory. This updates only the image-directory index in `project.json`; it does not copy, move, or delete source images. Annotation, preview, data-version, and training-filter views refresh immediately.
+
+### General
+
+| Shortcut | Function |
+|:---|:---|
+| `Ctrl+N` / `Ctrl+O` | Create / open a project |
+| `Ctrl+Shift+O` | Switch the project image directory |
+| `Ctrl+E` / `Ctrl+I` | Export / import annotations |
+| `Ctrl+S` | Save the current annotation |
+| `Shift+A` / `Ctrl+Shift+A` | Auto-label the current image / run batch labeling |
+| `T` | Apply the selected Tag to selected images |
+| `F5` | Rescan project images |
+
+### Detection / Segmentation / Pose
+
+| Shortcut | Function |
+|:---|:---|
+| `W` | Box drawing mode |
+| `P` | Polygon drawing mode |
+| `O` | Drag to draw an OBB; drag the outside circular handle to rotate it after selection |
+| `K` | Keypoint mode |
+| `V` | Select / move mode |
+| `Enter` | Finish the current polygon |
+| `Esc` | Cancel the current polygon |
+| `A` / `←` | Previous image |
+| `D` / `→` | Next image |
+| `Space` | Confirm the selected annotation |
+| `Ctrl+Space` | Confirm every annotation in the current image |
+| `Delete` | Delete the selected annotation |
+| `Ctrl+Z` / `Ctrl+Y` | Undo / redo |
+| `Ctrl+C` / `Ctrl+V` | Copy / paste annotations |
+| `Ctrl++` / `Ctrl+-` | Zoom in / out |
+| `Ctrl+0` | Fit to window |
+
+### Classification
+
+| Shortcut | Function |
+|:---|:---|
+| `1` to `9` | Quickly select a class |
+| `Space` | Confirm the current or selected images |
+| `Backspace` | Clear classification labels from selected images |
+| `Delete` | Delete selected images and their app annotations after confirmation |
+| `Ctrl+A` | Select all images in the current filtered result |
+| `Ctrl+Z` / `Ctrl+Y` | Undo / redo |
 
 ---
 
 ## Requirements
 
-- Python ≥ 3.10
-- OS: Linux / macOS / Windows
+- Python >= 3.10
+- Operating systems: Linux / macOS / Windows
+- Core dependencies: PyQt5, Ultralytics, ONNX Runtime, pyqtgraph, PyYAML, and packaging
+
+Training and inference can run on CPU, but an NVIDIA GPU is recommended for practical training. The LocateAnything-3B backend requires an NVIDIA GPU.
+
+---
 
 ## Installation
 
-The core dependencies are light: **PyQt5** (UI) and **Ultralytics** (YOLO inference/training), plus a few smaller libraries such as pyqtgraph (training curves) — see `requirements.txt` for the full list.
-
-Using Miniconda to create an isolated environment is recommended:
+Using Conda to create an isolated environment is recommended:
 
 ```bash
 git clone https://github.com/xzcGit/autolabel-dock.git
@@ -225,7 +342,13 @@ conda activate autolabel
 pip install -r requirements.txt
 ```
 
-The optional LocateAnything-3B text-labeling backend is large and installed on demand; see the enablement requirements in [Optional: LocateAnything Text Labeling](#optional-locateanything-text-labeling).
+To enable the optional LocateAnything-3B text-labeling backend, install its additional dependencies:
+
+```bash
+pip install -e ".[locateanything]"
+```
+
+---
 
 ## Running
 
@@ -233,98 +356,110 @@ The optional LocateAnything-3B text-labeling backend is large and installed on d
 python main.py
 ```
 
+If Chinese terminal output is garbled on Windows, prefer Windows Terminal / PowerShell 7 and make sure the terminal uses UTF-8. The application also configures Python's UTF-8 environment at startup.
+
+---
+
 ## Model Weights
 
-Bundled YOLO pretrained weights are stored in `pretrained_models/`. Other official models (`yolov8n.pt`, `yolov8s.pt`, etc.) are downloaded automatically by Ultralytics the first time they are used; if automatic download fails, place the corresponding `.pt` file in `pretrained_models/`. See the next section for how to obtain the LocateAnything-3B weights.
+Pretrained weights are stored in `pretrained_models/`. External `.pt` / `.onnx` files can also be imported from the Model panel. Training outputs are registered automatically, and PT models can be exported to ONNX.
+
+---
 
 ## Optional: LocateAnything Text Labeling
 
-LocateAnything-3B is an optional open-vocabulary detection backend that lets you describe targets in natural language. The rest of the app works perfectly fine without it. Enabling it requires **all three** of the following conditions; if any is unmet, the UI shows a message (in Chinese) and the rest of the app is unaffected:
+LocateAnything-3B is an optional natural-language detection backend. To enable it:
 
-**1. Install the optional dependencies**
+1. Install the dependencies:
 
-```bash
-pip install -e ".[locateanything]"
-```
+   ```bash
+   pip install -e ".[locateanything]"
+   ```
 
-This additionally installs transformers, accelerate, bitsandbytes, and decord (the base install does not include these heavy dependencies).
+2. Download the model weights:
 
-**2. Download the model weights in advance**
+   ```bash
+   hf download nvidia/LocateAnything-3B
+   ```
 
-At runtime the model is loaded in offline mode (`HF_HUB_OFFLINE=1`) and is **not** downloaded automatically, so you must download `nvidia/LocateAnything-3B` into the local HuggingFace cache beforehand:
+3. Prepare a supported NVIDIA GPU; at least 6 GB of VRAM is recommended.
 
-```bash
-hf download nvidia/LocateAnything-3B
-# Legacy tool: huggingface-cli download nvidia/LocateAnything-3B
-```
-
-The default cache location is `~/.cache/huggingface/hub`; `$HF_HOME` and `$HUGGINGFACE_HUB_CACHE` are also honored.
-
-**3. GPU memory**
-
-An NVIDIA GPU with a working `nvidia-smi` is required — **CPU is not supported**; total VRAM must be ≥ 6GB and free VRAM ≥ 5GB at enable time (on a single-GPU machine the desktop display also consumes VRAM, hence the relatively high free-memory threshold).
-
-> Additionally: LocateAnything and YOLO models never occupy the GPU at the same time — enabling LocateAnything automatically unloads the loaded YOLO model, and the reverse (loading a YOLO model or starting training) prompts you to confirm disabling LocateAnything first. It runs in a separate subprocess, isolated from the main UI process.
+LocateAnything runs in an offline subprocess and coordinates GPU memory usage with YOLO models.
 
 ---
 
 ## Platform Notes
 
-Dataset preparation creates many links "pointing to the original images." The code (`link_or_copy` in `src/utils/fs.py`) falls back automatically in the following priority order so it runs on any platform:
+Training dataset preparation organizes source images into the YOLO directory structure. To minimize disk usage, the application creates image references in this order:
 
-```
-symlink (symbolic link) → hardlink (hard link) → copy
+```text
+symlink -> hardlink -> copy
 ```
 
-| Method | Condition | Speed | Extra space |
+| Method | Trigger | Speed | Extra space |
 |:---|:---|:---:|:---:|
-| symlink | Supported and permitted (default on Linux/macOS; Windows needs Developer Mode or admin) | Fastest | Near zero |
-| hardlink | symlink failed, and source and target are on the same volume (no privilege needed on Windows NTFS) | Fastest | Near zero |
-| copy | Both of the above failed (typically: cross-drive + non-Developer-Mode) | Slow | Equal to total image size |
+| symlink | Supported and permitted; Linux / macOS usually work by default, while Windows requires Developer Mode or administrator privileges | Fast | Almost none |
+| hardlink | Symlink creation failed and the source and target are on the same disk volume | Fast | Almost none |
+| copy | Both previous methods failed, for example across Windows drives without Developer Mode | Slow | Equal to the total image size |
 
-> ⚠️ **Windows recommendation**: enable Developer Mode (Settings → Privacy & security → For developers) — a one-time setting that persists and behaves like Linux; or keep the project directory and the image directory on the same drive (the hardlink path kicks in automatically).
->
-> **Other notes**: prefer ASCII-only project paths; if you point the image directory at another drive (cross-drive), links degrade to copies and consume extra disk space.
+On Windows, enable **Developer Mode** when possible, or keep the project and image directories on the same drive. Simple ASCII project paths are recommended to reduce path-encoding issues in third-party training libraries.
 
 ---
 
 ## Project Structure
 
-```
+```text
 autolabel-dock/
+├── config/                  Global configuration, static resource indexes, and training templates
+├── icon/                    Runtime SVG assets and the Windows EXE icon
+├── pretrained_models/       Bundled YOLO pretrained weights
+├── resources/screenshots/   README screenshots
 ├── src/
-│   ├── core/         Pure data models and IO (annotations, project config, import/export formats, backups)
-│   ├── engine/       YOLO training / inference wrappers and dataset preparation
-│   ├── controllers/  Bridging and orchestration between UI and core layers
-│   ├── ui/           PyQt5 UI components (canvas, panels, dialogs)
-│   └── utils/        Background threads, undo stack, image cache, and other utilities
-├── tests/            pytest tests
-├── resources/        Screenshots and other static resources
-├── main.py           Application entry point
-└── requirements.txt  Dependency list
+│   ├── app.py               Main window and application orchestration
+│   ├── controllers/         Project, model, training, Tag, and LocateAnything controllers
+│   ├── core/                Data models, project config, label IO, import/export, and backups
+│   ├── engine/              YOLO training/inference, dataset preparation, and model backends
+│   ├── ui/                  PyQt5 widgets, canvas, panels, dialogs, and views
+│   └── utils/               Image cache, background threads, file linking, logging, and undo stack
+├── main.py                  Application entry point
+├── PyInstaller.txt          Windows packaging reference
+├── pyproject.toml           Project metadata and optional dependencies
+├── requirements.txt         Base dependencies
+└── LICENSE                  AGPL-3.0 license
 ```
 
 ---
 
-## Contributing
+## Packaging Notes
 
-Issues and PRs are welcome. After setting up the environment per the Installation section above, run the tests:
+The repository includes `PyInstaller.txt` as a Windows packaging reference. Run it in an environment with Ultralytics installed and keep `icon/`, `logoicon/`, `pretrained_models/`, and other runtime resources. Add optional dependencies such as LocateAnything separately when required by the release.
+
+---
+
+## Development
+
+After installing the dependencies, run the application directly:
+
+```bash
+python main.py
+```
+
+Run the test suite with:
 
 ```bash
 pytest
 ```
 
+---
+
 ## License
 
 This project is released under the **[AGPL-3.0](LICENSE)** license.
 
-> The project's core dependencies use strong copyleft licenses:
->
-> - **PyQt5** — GPL-3.0
-> - **Ultralytics (YOLOv8)** — AGPL-3.0
->
-> The strictest among the dependencies is AGPL-3.0, and this project aligns accordingly. To use it in a closed-source/commercial product, obtain the corresponding commercial licenses for those dependencies yourself (a PyQt commercial license, an Ultralytics enterprise license).
+PyQt5 uses GPL-3.0, and Ultralytics uses AGPL-3.0. If you plan to integrate this project into closed-source or commercial software, verify the applicable terms and obtain commercial licenses for the relevant dependencies where necessary.
+
+---
 
 ## Links
 
-- **[Linux DO](https://linux.do/)**
+- [Linux DO](https://linux.do/)

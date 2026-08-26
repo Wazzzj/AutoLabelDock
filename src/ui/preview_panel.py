@@ -37,9 +37,12 @@ from PyQt5.QtWidgets import (
 
 from src.core.annotation import (
     ImageAnnotation,
+    POSE_BOUNDING_BOX_RGB,
     annotation_center,
     annotation_display_label,
     annotation_pixel_geometry,
+    keypoint_display_rgb,
+    keypoint_skeleton_colored_segments,
 )
 from src.core.annotation_classes import merged_project_annotation_classes
 from src.core.label_io import load_annotation
@@ -370,7 +373,8 @@ def _draw_annotation_overlays(
             cx, cy, w, h = ann.bbox
             x1, y1 = _norm_xy(image_rect, cx - w / 2, cy - h / 2)
             x2, y2 = _norm_xy(image_rect, cx + w / 2, cy + h / 2)
-            pen = QPen(color, line_width)
+            bbox_color = QColor(*POSE_BOUNDING_BOX_RGB) if ann.keypoints else color
+            pen = QPen(bbox_color, line_width)
             pen.setStyle(_annotation_control_pen_style(
                 ann, annotation.image_size, control_rules or {}, control_enabled, rois
             ))
@@ -379,10 +383,35 @@ def _draw_annotation_overlays(
             painter.drawRect(QRect(int(x1), int(y1), int(x2 - x1), int(y2 - y1)))
             label_anchor = (x1, y1)
 
-        for kp in ann.keypoints:
+        if ann.keypoints:
+            painter.setBrush(Qt.NoBrush)
+            fallback_rgb = (color.red(), color.green(), color.blue())
+            for start, end, rgb in keypoint_skeleton_colored_segments(
+                ann.keypoints, fallback_rgb
+            ):
+                skeleton_pen = QPen(QColor(*rgb), line_width)
+                skeleton_pen.setCapStyle(Qt.RoundCap)
+                painter.setPen(skeleton_pen)
+                painter.drawLine(
+                    _norm_point(image_rect, start.x, start.y),
+                    _norm_point(image_rect, end.x, end.y),
+                )
+
+        for index, kp in enumerate(ann.keypoints):
             x, y = _norm_xy(image_rect, kp.x, kp.y)
-            painter.setPen(QPen(color, line_width))
-            painter.setBrush(color if kp.visible == 2 else Qt.NoBrush)
+            point_rgb = keypoint_display_rgb(
+                ann.keypoints, index, (color.red(), color.green(), color.blue())
+            )
+            point_color = QColor(*point_rgb)
+            if kp.visible == 0:
+                painter.setPen(QPen(QColor(PALETTE["text_subtle"]), line_width))
+                painter.setBrush(Qt.NoBrush)
+            elif kp.visible == 1:
+                painter.setPen(QPen(point_color, line_width))
+                painter.setBrush(Qt.NoBrush)
+            else:
+                painter.setPen(QPen(point_color, line_width))
+                painter.setBrush(point_color)
             painter.drawEllipse(
                 int(x - point_radius),
                 int(y - point_radius),
