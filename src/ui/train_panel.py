@@ -21,6 +21,8 @@ from PyQt5.QtWidgets import (
     QSplitter,
     QCheckBox,
     QProgressBar,
+    QListWidget,
+    QAbstractItemView,
     QScrollArea,
     QInputDialog,
     QFileDialog,
@@ -234,6 +236,7 @@ class TrainPanel(QWidget):
 
     start_requested = pyqtSignal(object)  # TrainConfig
     stop_requested = pyqtSignal()
+    clear_queue_requested = pyqtSignal()
     preview_augmentation_requested = pyqtSignal(dict)  # augmentation params dict
     filter_changed = pyqtSignal(object)  # TagFilter — re-emitted from inner TagFilterBar
 
@@ -707,26 +710,69 @@ class TrainPanel(QWidget):
 
         left_layout.addWidget(self._pose_group)
 
-        # Resume checkbox
-        self._resume_check = QCheckBox("断点续训 (Resume)")
-        left_layout.addWidget(self._resume_check)
+        # Keep the queue, progress and action footer anchored at the bottom of
+        # the parameter sidebar when the parameter groups are shorter than the
+        # available viewport.
+        left_layout.addStretch()
 
-        # Buttons
-        btn_layout = QHBoxLayout()
-        self._btn_start = QPushButton(icon("start", PALETTE["ink"]), "开始训练")
-        set_button_role(self._btn_start, "primary")
-        self._btn_start.setToolTip("开始训练模型")
-        self._btn_stop = QPushButton(icon("stop"), "停止训练")
-        set_button_role(self._btn_stop, "danger")
-        self._btn_stop.setEnabled(False)
-        self._btn_stop.setToolTip("停止当前训练")
-        self._btn_preview_aug = QPushButton("预览增强")
-        set_button_role(self._btn_preview_aug, "secondary")
-        self._btn_preview_aug.setToolTip("预览当前数据增强参数效果")
-        btn_layout.addWidget(self._btn_start)
-        btn_layout.addWidget(self._btn_stop)
-        btn_layout.addWidget(self._btn_preview_aug)
-        left_layout.addLayout(btn_layout)
+        # Queue maintenance action lives in the queue card header.
+        self._btn_clear_queue = QPushButton("清空等待")
+        set_button_role(self._btn_clear_queue, "secondary")
+        self._btn_clear_queue.setEnabled(False)
+        self._btn_clear_queue.setToolTip("移除尚未开始的训练任务，不影响当前训练")
+
+        # Compact queue card. Queue maintenance lives in the header instead of
+        # competing with the primary actions below.
+        self._queue_container = QWidget()
+        self._queue_container.setObjectName("trainingQueueBox")
+        self._queue_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        queue_layout = QVBoxLayout(self._queue_container)
+        queue_layout.setContentsMargins(8, 6, 8, 7)
+        queue_layout.setSpacing(4)
+
+        queue_header = QHBoxLayout()
+        queue_header.setContentsMargins(2, 0, 0, 0)
+        self._queue_title = QLabel("训练队列")
+        self._queue_title.setStyleSheet(text_style("section"))
+        self._queue_summary = QLabel()
+        self._queue_summary.setStyleSheet(text_style("hint"))
+        self._btn_clear_queue.setMaximumWidth(86)
+        self._btn_clear_queue.setFixedHeight(28)
+        self._btn_clear_queue.setVisible(False)
+        queue_header.addWidget(self._queue_title)
+        queue_header.addWidget(self._queue_summary)
+        queue_header.addStretch()
+        queue_header.addWidget(self._btn_clear_queue)
+        queue_layout.addLayout(queue_header)
+
+        self._queue_list = QListWidget()
+        self._queue_list.setObjectName("trainingQueueList")
+        self._queue_list.setFocusPolicy(Qt.NoFocus)
+        self._queue_list.setSelectionMode(QAbstractItemView.NoSelection)
+        self._queue_list.setSpacing(4)
+        self._queue_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._queue_list.setToolTip("训练任务按此顺序串行执行")
+        queue_layout.addWidget(self._queue_list)
+        self._queue_container.setStyleSheet(
+            "QWidget#trainingQueueBox {"
+            f" background-color: {PALETTE['panel']};"
+            f" border: 1px solid {PALETTE['line']};"
+            " border-radius: 8px;"
+            "}"
+            "QWidget#trainingQueueBox QLabel {"
+            " background: transparent; border: none;"
+            "}"
+            "QListWidget#trainingQueueList {"
+            " background: transparent; border: none; padding: 0px;"
+            "}"
+            "QListWidget#trainingQueueList::item {"
+            f" background-color: {PALETTE['panel_alt']};"
+            f" color: {PALETTE['text']};"
+            " border: none; border-radius: 5px; padding: 5px 8px;"
+            "}"
+        )
+        self._queue_container.setVisible(False)
+        left_layout.addWidget(self._queue_container)
 
         # Epoch progress bar
         self._epoch_progress = QProgressBar()
@@ -736,7 +782,28 @@ class TrainPanel(QWidget):
         self._epoch_progress.setVisible(False)
         left_layout.addWidget(self._epoch_progress)
 
-        left_layout.addStretch()
+        # Resume and primary actions deliberately sit below the queue so they
+        # form the final, stable footer of the parameter sidebar.
+        self._resume_check = QCheckBox("断点续训 (Resume)")
+        left_layout.addWidget(self._resume_check)
+
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(8)
+        self._btn_start = QPushButton(icon("start", PALETTE["ink"]), "开始训练")
+        set_button_role(self._btn_start, "primary")
+        self._btn_start.setToolTip("开始训练；训练进行中时将当前配置加入等待队列")
+        self._btn_stop = QPushButton("停止训练")
+        set_button_role(self._btn_stop, "danger")
+        self._btn_stop.setEnabled(False)
+        self._btn_stop.setToolTip("停止当前训练并清空所有等待任务")
+        self._btn_preview_aug = QPushButton("预览增强")
+        set_button_role(self._btn_preview_aug, "secondary")
+        self._btn_preview_aug.setToolTip("预览当前数据增强参数效果")
+        btn_layout.addWidget(self._btn_start, 2)
+        btn_layout.addWidget(self._btn_stop, 1)
+        btn_layout.addWidget(self._btn_preview_aug, 1)
+        left_layout.addLayout(btn_layout)
+
         scroll.setWidget(left)
 
         # Right: curves + log
@@ -878,6 +945,9 @@ class TrainPanel(QWidget):
         self._freeze_default_check.toggled.connect(self._on_freeze_default_toggled)
         self._btn_start.clicked.connect(self._on_start)
         self._btn_stop.clicked.connect(self._on_stop)
+        self._btn_clear_queue.clicked.connect(
+            lambda _checked=False: self.clear_queue_requested.emit()
+        )
         self._btn_preview_aug.clicked.connect(self._on_preview_augmentation)
         self._btn_save_template.clicked.connect(self._on_save_template)
         self._btn_delete_template.clicked.connect(self._on_delete_template)
@@ -1258,12 +1328,25 @@ class TrainPanel(QWidget):
         self._last_saved_train_settings = dict(current)
 
     def _on_start(self) -> None:
+        # MainWindow validates and snapshots the task before either starting it
+        # or placing it in the queue. Prevent duplicate clicks during that work.
         self._btn_start.setEnabled(False)
-        self._btn_start.setText("训练中")
-        self._btn_stop.setEnabled(True)
-        self._log_text.clear()
+        self._btn_start.setText("正在加入…")
+
+    def on_training_started(
+        self,
+        display_name: str,
+        total_epochs: int,
+        *,
+        clear_history: bool = False,
+    ) -> None:
+        """Prepare progress widgets when a queued job actually starts."""
+        if clear_history:
+            self._log_text.clear()
+        else:
+            self.append_log("")
+        self.append_log(f"--- 开始训练: {display_name} ---")
         self._epoch_data.clear()
-        total_epochs = self._epochs_spin.value()
         self._epoch_progress.setRange(0, total_epochs)
         self._epoch_progress.setValue(0)
         self._epoch_progress.setVisible(True)
@@ -1589,7 +1672,6 @@ class TrainPanel(QWidget):
     def on_training_finished(self, metrics: dict) -> None:
         """Handle training completion."""
         self._btn_start.setEnabled(True)
-        self._btn_start.setText("开始训练")
         self._btn_stop.setEnabled(False)
         self._epoch_progress.setVisible(False)
         self.append_log("--- 训练完成 ---")
@@ -1600,7 +1682,6 @@ class TrainPanel(QWidget):
     def on_training_cancelled(self) -> None:
         """Handle training cancellation. Symmetric to ``on_training_finished``."""
         self._btn_start.setEnabled(True)
-        self._btn_start.setText("开始训练")
         self._btn_stop.setEnabled(False)
         self._epoch_progress.setVisible(False)
         self.append_log("--- 训练已停止 ---")
@@ -1608,8 +1689,8 @@ class TrainPanel(QWidget):
     def reset_start_button_idle(self) -> None:
         """Restore the start/stop buttons to their pre-training idle state.
 
-        ``_on_start`` flips the start button to the running state ("训练中",
-        disabled) the instant it is clicked. When the training launch is then
+        ``_on_start`` temporarily marks the start button as busy the instant it
+        is clicked. When the queue submission is then
         aborted *before* a worker exists — e.g. the user declines the
         LocateAnything-disable confirmation in ``MainWindow._on_start_training``
         — there is no ``finished`` / ``cancelled`` signal to restore the UI, so
@@ -1622,10 +1703,39 @@ class TrainPanel(QWidget):
         self._btn_stop.setEnabled(False)
         self._epoch_progress.setVisible(False)
 
+    def set_training_queue(
+        self,
+        active_name: str | None,
+        waiting_names: list[str],
+    ) -> None:
+        """Render the active job and FIFO waiting list."""
+        self._queue_list.clear()
+        if active_name:
+            self._queue_list.addItem(f"●  训练中    {active_name}")
+        for index, name in enumerate(waiting_names, start=1):
+            self._queue_list.addItem(f"○  等待 {index}    {name}")
+        task_count = (1 if active_name else 0) + len(waiting_names)
+        summary_parts = [f"{task_count} 个任务"]
+        if waiting_names:
+            summary_parts.append(f"{len(waiting_names)} 个等待")
+        self._queue_summary.setText(" · ".join(summary_parts))
+        visible_rows = min(task_count, 3)
+        self._queue_list.setFixedHeight(visible_rows * 34)
+        self._queue_container.setVisible(task_count > 0)
+        self._btn_start.setEnabled(True)
+        self._btn_start.setText("加入队列" if active_name else "开始训练")
+        self._btn_stop.setEnabled(bool(active_name))
+        self._btn_stop.setText("停止全部" if waiting_names else "停止训练")
+        self._btn_clear_queue.setEnabled(bool(waiting_names))
+        self._btn_clear_queue.setVisible(bool(waiting_names))
+
+    def on_queue_submission_error(self, error_msg: str) -> None:
+        """Report an enqueue/validation failure without disturbing a running job."""
+        self.append_log(f"--- 未加入训练队列: {error_msg} ---")
+
     def on_training_error(self, error_msg: str) -> None:
         """Handle training error."""
         self._btn_start.setEnabled(True)
-        self._btn_start.setText("开始训练")
         self._btn_stop.setEnabled(False)
         self._epoch_progress.setVisible(False)
         self.append_log(f"--- 训练失败: {error_msg} ---")

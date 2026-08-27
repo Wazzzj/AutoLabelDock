@@ -11,11 +11,12 @@ from PyQt5.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QShortcut,
 )
 
 from src.ui.theme import PALETTE, text_style
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QColor
+from PyQt5.QtGui import QColor, QKeySequence
 
 
 def _move_popup_onscreen(widget: QDialog, anchor_pos) -> None:
@@ -106,6 +107,12 @@ class ClassPickerPopup(QDialog):
 
         # Focus the input for immediate typing
         self._input.setFocus()
+
+        # QLineEdit/QListWidget may consume Escape before QDialog receives it.
+        # A child-aware shortcut makes cancellation reliable regardless of focus.
+        self._escape_shortcut = QShortcut(QKeySequence(Qt.Key_Escape), self)
+        self._escape_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self._escape_shortcut.activated.connect(self.reject)
 
     def move_near(self, anchor_pos) -> None:
         _move_popup_onscreen(self, anchor_pos)
@@ -240,6 +247,10 @@ class KeypointLabelPicker(QDialog):
         layout.addWidget(hint)
 
         self._input.setFocus()
+
+        self._escape_shortcut = QShortcut(QKeySequence(Qt.Key_Escape), self)
+        self._escape_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self._escape_shortcut.activated.connect(self.reject)
 
     def move_near(self, anchor_pos) -> None:
         _move_popup_onscreen(self, anchor_pos)

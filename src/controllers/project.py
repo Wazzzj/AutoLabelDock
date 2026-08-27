@@ -95,6 +95,13 @@ class ProjectController:
                     moved_label_count,
                     pm.config.label_dir,
                 )
+            sidecar_count = pm.import_image_sidecar_annotations()
+            if sidecar_count:
+                logger.info(
+                    "Imported %d image-sidecar annotations into %s",
+                    sidecar_count,
+                    pm.config.label_dir,
+                )
             imported_count, imported_format = self.import_discovered_obb_sidecars(pm)
             if imported_count:
                 logger.info(
@@ -171,6 +178,13 @@ class ProjectController:
         """Open a project from directory. Returns ProjectManager or None."""
         try:
             pm = ProjectManager.open(project_dir)
+            sidecar_count = pm.import_image_sidecar_annotations()
+            if sidecar_count:
+                logger.info(
+                    "Imported %d image-sidecar annotations into %s",
+                    sidecar_count,
+                    pm.config.label_dir,
+                )
             imported_count, imported_format = self.import_discovered_obb_sidecars(pm)
             if imported_count:
                 logger.info(

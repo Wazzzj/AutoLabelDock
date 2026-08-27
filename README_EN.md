@@ -46,6 +46,7 @@ AutoLabel Dock is a cross-platform desktop tool built with **PyQt5 + Ultralytics
 - Per-image undo / redo, auto-save when switching images, and image caching.
 - Image states are clearly separated into unlabeled, pending, and confirmed.
 - Drag-and-drop import plus batch confirmation, deletion, moving, and class changes.
+- Clear every annotation in the current image from the annotation list after confirmation, with undo support.
 - Combined filtering by status, class, and custom Tags.
 - Catppuccin Mocha dark theme.
 
@@ -58,6 +59,7 @@ AutoLabel Dock is a cross-platform desktop tool built with **PyQt5 + Ultralytics
 
 ### Data Versions
 
+- When a project is created, its project directory also becomes the image root. Direct child directories are discovered as data versions, while nested directories inside a version are not registered again.
 - Create, rename, and remove data versions, and move images with their labels between versions.
 - Removing a version only removes its index and does not delete files from disk; recreating a version with the same name restores access.
 - Training and batch labeling can be scoped by data version, status, class, and Tag.
@@ -80,8 +82,9 @@ AutoLabel Dock is a cross-platform desktop tool built with **PyQt5 + Ultralytics
 - One-click dataset preparation for all five YOLO tasks, with stratified sampling, training templates, and full hyperparameter control.
 - Configure Freeze and other training parameters directly in the panel; the model-structure viewer is no longer included.
 - Augmentation preview covers geometry, color, Mosaic, MixUp, Copy-Paste, and related policies.
-- Training runs in an isolated subprocess, can be canceled, and displays metrics in real time.
-- The best model is saved, registered, and loaded automatically when training completes.
+- Training runs in an isolated subprocess, can be canceled, displays metrics in real time, and supports serial model queues.
+- Waiting jobs can be cleared independently; stopping the active job also removes every waiting job.
+- A single training job saves, registers, and auto-loads its best model; multi-job queues register models without repeatedly loading them.
 
 ### Model Management
 
@@ -113,9 +116,24 @@ Exports use each format's conventional directory layout and preserve image subdi
 
 ### Data Safety
 
-- Annotations are stored as one JSON file per image.
-- Automatic backups are written to `.backups/` before high-risk operations; the latest 20 are retained by default.
+- New projects use sidecar storage: each image keeps a same-name JSON annotation beside it, such as `0001.jpg` with `0001.json`. Legacy projects configured with a separate `labels/` directory remain supported.
+- Moving, renaming, or deleting a project image applies the same operation to its sidecar JSON.
+- Before high-risk operations, `project.json` and annotations from every data version are backed up to `.backups/`; the latest 20 backups are retained by default.
 - Global configuration is stored in `config/`, and runtime logs are stored in `logs/`.
+
+A typical project data directory looks like this:
+
+```text
+my-project/
+├── project.json
+├── version-a/              Data version
+│   ├── 0001.jpg
+│   └── 0001.json           Sidecar annotation
+├── version-b/              Data version
+├── datasets/               Temporary training datasets
+├── models/                 Registered models
+└── .backups/               Automatic backups
+```
 
 ---
 
@@ -125,8 +143,8 @@ Exports use each format's conventional directory layout and preserve image subdi
 1. Create project -> 2. Import images -> 3. Annotate / pre-annotate -> 4. Confirm -> 5. Train -> 6. Iterate
 ```
 
-1. Create a project: choose `detect`, `segment`, `obb`, `pose`, or `classify`, then enter the project directory and initial classes.
-2. Import images: drag images into the file list, or add images / image directories from the data-folder menu.
+1. Create a project: choose `detect`, `segment`, `obb`, `pose`, or `classify`, then enter the project directory and initial classes. The project directory becomes the image root, and existing direct child directories become data versions automatically.
+2. Import images: drag images into the file list or select an image directory. Directory import copies images and same-name JSON files, preserves subdirectories, and refreshes data versions automatically.
 3. Annotate: draw boxes or polygons, drag and rotate OBBs, place keypoints, or select classification labels. You can also load YOLO weights for automatic pre-annotation.
 4. Confirm: review automatic annotations, correct them, and confirm the result.
 5. Train: select the base model, template, and hyperparameters in the Training panel, prepare the dataset, and start training.
@@ -272,14 +290,14 @@ See the [Ultralytics training configuration](https://docs.ultralytics.com/modes/
 
 ## Keyboard Shortcuts
 
-Use **File → Select Image Directory...** or `Ctrl+Shift+O` to switch the current project to a local or external image directory. This updates only the image-directory index in `project.json`; it does not copy, move, or delete source images. Annotation, preview, data-version, and training-filter views refresh immediately.
+Use **File → Select Image Directory...** or `Ctrl+Shift+O` to add a local image directory to the current project. Images are copied into the project root while preserving their subdirectory layout, and direct child directories are automatically recognized as data versions. Annotation, preview, data-version, and training-filter views refresh immediately after import.
 
 ### General
 
 | Shortcut | Function |
 |:---|:---|
 | `Ctrl+N` / `Ctrl+O` | Create / open a project |
-| `Ctrl+Shift+O` | Switch the project image directory |
+| `Ctrl+Shift+O` | Add an image directory to the current project |
 | `Ctrl+E` / `Ctrl+I` | Export / import annotations |
 | `Ctrl+S` | Save the current annotation |
 | `Shift+A` / `Ctrl+Shift+A` | Auto-label the current image / run batch labeling |
@@ -296,7 +314,7 @@ Use **File → Select Image Directory...** or `Ctrl+Shift+O` to switch the curre
 | `K` | Keypoint mode |
 | `V` | Select / move mode |
 | `Enter` | Finish the current polygon |
-| `Esc` | Cancel the current polygon |
+| `Esc` | Cancel the current drawing or close a class / keypoint picker, then return to selection mode |
 | `A` / `←` | Previous image |
 | `D` / `→` | Next image |
 | `Space` | Confirm the selected annotation |

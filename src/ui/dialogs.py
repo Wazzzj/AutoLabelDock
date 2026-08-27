@@ -123,7 +123,9 @@ class NewProjectDialog(QDialog):
         """Return (name, project_dir, image_dir, classes, task_type)."""
         name = self._name_edit.text().strip()
         proj_dir = self._dir_edit.text().strip()
-        image_dir = "images"
+        # The selected project directory is also the image root. Its direct
+        # child directories are discovered as data versions during creation.
+        image_dir = "."
         classes_text = self._classes_edit.text().strip()
         classes = [c.strip() for c in classes_text.split(",") if c.strip()] if classes_text else []
         task_type = self._task_type_combo.currentText()

@@ -48,6 +48,63 @@ def test_data_version_import_has_no_small_dataset_limit(tmp_path):
     assert len(project.list_images(data_folder="bulk")) == expected_count
 
 
+def test_importing_image_root_preserves_children_as_data_versions(tmp_path):
+    project = ProjectManager.create(
+        tmp_path / "project",
+        "demo",
+        image_dir=".",
+    )
+    source_root = tmp_path / "source"
+    source_image = source_root / "version-a" / "nested" / "sample.jpg"
+    source_image.parent.mkdir(parents=True)
+    source_image.write_bytes(b"image")
+
+    imported, skipped = project.import_images_to_folder([source_root], "")
+
+    expected = project.project_dir / "version-a" / "nested" / "sample.jpg"
+    assert imported == [expected]
+    assert skipped == []
+    assert expected.read_bytes() == b"image"
+    assert project.list_data_folders() == ["version-a"]
+    assert project.list_images(data_folder="version-a") == [expected]
+
+
+def test_existing_root_sidecars_are_mirrored_without_removing_sources(tmp_path):
+    project_root = tmp_path / "project"
+    version = project_root / "version-a"
+    version.mkdir(parents=True)
+    image = version / "sample.jpg"
+    sidecar = version / "sample.json"
+    image.write_bytes(b"image")
+    sidecar.write_text(
+        '{"image_path":"sample.jpg","image_size":[10,10],'
+        '"annotations":[],"image_tags":["ok"]}',
+        encoding="utf-8",
+    )
+    project = ProjectManager.create(project_root, "demo", image_dir=".")
+    project.config.label_dir = "labels"
+    (project_root / "labels").mkdir()
+
+    imported = project.import_image_sidecar_annotations()
+
+    mirrored = project_root / "labels" / "version-a" / "sample.json"
+    assert imported == 1
+    assert sidecar.exists()
+    assert mirrored.exists()
+    assert '"image_path": "version-a/sample.jpg"' in mirrored.read_text(encoding="utf-8")
+
+
+def test_new_projects_store_annotations_beside_images(tmp_path):
+    project = ProjectManager.create(tmp_path / "project", "demo", image_dir=".")
+    image = project.project_dir / "version-a" / "sample.jpg"
+    image.parent.mkdir()
+    image.write_bytes(b"image")
+
+    assert project.config.label_dir == "."
+    assert project.label_path_for(image) == image.with_suffix(".json")
+    assert not (project.project_dir / "labels").exists()
+
+
 def test_delete_data_version_only_removes_persistent_index(tmp_path):
     project = ProjectManager.create(tmp_path / "project", "demo")
     project.create_data_folder("version_a")

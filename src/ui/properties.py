@@ -13,6 +13,7 @@ from PyQt5.QtWidgets import (
     QMenu,
     QInputDialog,
     QFrame,
+    QPushButton,
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor
@@ -20,7 +21,7 @@ from PyQt5.QtGui import QColor
 from src.core.annotation import Annotation
 from src.ui.collapsible_group import CollapsibleGroupBox
 from src.ui.tag_widget import TagChipBar
-from src.ui.theme import PALETTE, text_style
+from src.ui.theme import PALETTE, set_button_role, text_style
 
 
 class _ClassRow(QWidget):
@@ -60,6 +61,7 @@ class AnnotationPanel(QWidget):
     annotation_class_change_requested = pyqtSignal(str)
     annotation_confirm_requested = pyqtSignal(str, bool)
     annotation_delete_requested = pyqtSignal(str)
+    clear_all_annotations_requested = pyqtSignal()
     keypoint_add_requested = pyqtSignal(str)
     keypoint_clicked = pyqtSignal(str, int)
     keypoint_rename_requested = pyqtSignal(str, int, str)
@@ -118,6 +120,16 @@ class AnnotationPanel(QWidget):
         self._ann_tree.itemExpanded.connect(lambda _item: self._sync_annotation_tree_height())
         self._ann_tree.itemCollapsed.connect(lambda _item: self._sync_annotation_tree_height())
         ann_layout.addWidget(self._ann_tree)
+        clear_layout = QHBoxLayout()
+        clear_layout.setContentsMargins(0, 0, 0, 0)
+        clear_layout.addStretch(1)
+        self._clear_all_btn = QPushButton("清空全部标注")
+        self._clear_all_btn.setToolTip("清除当前图片的全部标注，可通过 Ctrl+Z 撤销")
+        self._clear_all_btn.setEnabled(False)
+        set_button_role(self._clear_all_btn, "danger")
+        self._clear_all_btn.clicked.connect(self.clear_all_annotations_requested.emit)
+        clear_layout.addWidget(self._clear_all_btn)
+        ann_layout.addLayout(clear_layout)
         ann_box.set_content_layout(ann_layout)
         outer.addWidget(ann_box)
         self._sections["标注列表"] = ann_box
@@ -301,6 +313,7 @@ class AnnotationPanel(QWidget):
                 top_item.setExpanded(True)
 
         self._ann_tree.blockSignals(False)
+        self._clear_all_btn.setEnabled(bool(annotations))
         self._sync_annotation_tree_height()
         self._update_stats()
         self._refresh_class_counts()
@@ -366,6 +379,7 @@ class AnnotationPanel(QWidget):
         self._selected_id = None
         self._selected_kp_idx = None
         self._ann_tree.clear()
+        self._clear_all_btn.setEnabled(False)
         self._sync_annotation_tree_height()
         self._refresh_class_counts()
         self._clear_properties()

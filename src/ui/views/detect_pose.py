@@ -307,6 +307,9 @@ class DetectPoseView(TaskView):
             self._on_panel_annotation_confirm
         )
         self._ann_panel.annotation_delete_requested.connect(self._on_annotation_deleted)
+        self._ann_panel.clear_all_annotations_requested.connect(
+            self._on_clear_all_annotations
+        )
         self._ann_panel.keypoint_add_requested.connect(self._on_panel_keypoint_add)
         self._ann_panel.keypoint_clicked.connect(self._on_panel_keypoint_clicked)
         self._ann_panel.keypoint_rename_requested.connect(self._on_keypoint_rename)
@@ -800,6 +803,23 @@ class DetectPoseView(TaskView):
         self._push_undo()
         self._sync_annotations_to_panel()
 
+    def _on_clear_all_annotations(self) -> None:
+        count = len(self._canvas.annotations)
+        if count == 0:
+            return
+        reply = QMessageBox.question(
+            self,
+            "清空全部标注",
+            f"确定清除当前图片的全部 {count} 个标注吗？\n该操作可通过 Ctrl+Z 撤销。",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        self._canvas.set_annotations([])
+        self._push_undo()
+        self._sync_annotations_to_panel()
+
     def _on_annotations_changed(self) -> None:
         self._sync_annotations_to_panel()
 
@@ -894,6 +914,7 @@ class DetectPoseView(TaskView):
 
     def _clear_draw_state(self) -> None:
         self._canvas.clear_draw_state()
+        self._set_tool("select")
 
     def _on_class_change_requested(self, ann_id: str, px: float, py: float) -> None:
         ann = next((a for a in self._canvas.annotations if a.id == ann_id), None)
@@ -1313,8 +1334,14 @@ class DetectPoseView(TaskView):
             self._set_tool("draw_keypoint")
         elif key in (Qt.Key_Return, Qt.Key_Enter) and self._canvas.tool_mode == "draw_polygon":
             self._canvas.finish_polygon()
-        elif key == Qt.Key_Escape and self._canvas.tool_mode == "draw_polygon":
-            self._canvas.cancel_polygon()
+        elif key == Qt.Key_Escape and self._canvas.tool_mode in {
+            "draw_bbox", "draw_obb", "draw_polygon", "draw_keypoint"
+        }:
+            if self._canvas.tool_mode == "draw_polygon":
+                self._canvas.cancel_polygon()
+            else:
+                self._canvas.clear_draw_state()
+            self._set_tool("select")
         elif key == Qt.Key_V and not (mod & Qt.ControlModifier):
             self._set_tool("select")
         elif key == Qt.Key_D or key == Qt.Key_Right:

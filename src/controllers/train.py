@@ -51,6 +51,9 @@ class TrainController:
         self._dataset_size: int = 0
         self._prepared_classes: list[str] = []
         self._has_prepared_classes: bool = False
+        self._dataset_size_at_start: int = 0
+        self._prepared_classes_at_start: list[str] = []
+        self._has_prepared_classes_at_start: bool = False
         self._train_config: TrainConfig | None = None
         # Snapshot of the training context captured at start(). Registration
         # reads from these instead of MainWindow's current state, so switching
@@ -68,6 +71,14 @@ class TrainController:
         return self._dataset_size
 
     @property
+    def prepared_classes(self) -> list[str]:
+        return list(self._prepared_classes)
+
+    @property
+    def has_prepared_classes(self) -> bool:
+        return self._has_prepared_classes
+
+    @property
     def project_at_start(self) -> ProjectManager | None:
         """Project that owned the currently running / just-finished training."""
         return self._project_at_start
@@ -79,6 +90,7 @@ class TrainController:
         status_filter: str | None = None,
         class_filter: str | None = None,
         data_folder: str | None = None,
+        dataset_output_dir: Path | str | None = None,
     ) -> str | None:
         """Validate dataset and prepare for training. Returns data_yaml path or None.
 
@@ -143,7 +155,11 @@ class TrainController:
                     return None
 
         preparer = DatasetPreparer(project)
-        output_dir = project.project_dir / "datasets" / "current"
+        output_dir = (
+            Path(dataset_output_dir)
+            if dataset_output_dir is not None
+            else project.project_dir / "datasets" / "current"
+        )
         data_yaml = preparer.prepare(
             output_dir, task=task, val_ratio=val_ratio, kpt_shape=kpt_shape,
             tag_filter=tag_filter,
@@ -164,6 +180,9 @@ class TrainController:
     def start(
         self, config: TrainConfig, project: ProjectManager, task: str,
         base_model: str = "",
+        dataset_size: int | None = None,
+        prepared_classes: list[str] | None = None,
+        has_prepared_classes: bool | None = None,
     ) -> TrainWorker:
         """Create and start a training worker. Returns the worker.
 
@@ -194,6 +213,17 @@ class TrainController:
         self._project_at_start = project
         self._task_at_start = task
         self._base_model_at_start = base_model or config.model
+        self._dataset_size_at_start = (
+            self._dataset_size if dataset_size is None else dataset_size
+        )
+        self._prepared_classes_at_start = list(
+            self._prepared_classes if prepared_classes is None else prepared_classes
+        )
+        self._has_prepared_classes_at_start = (
+            self._has_prepared_classes
+            if has_prepared_classes is None
+            else has_prepared_classes
+        )
 
         self._worker = TrainWorker(config)
         self._worker.start()
@@ -228,7 +258,11 @@ class TrainController:
         registry = ModelRegistry(project.project_dir / "models")
         registry.load()
 
-        classes = self._prepared_classes if self._has_prepared_classes else project.config.classes
+        classes = (
+            self._prepared_classes_at_start
+            if self._has_prepared_classes_at_start
+            else project.config.classes
+        )
         train_params = self._train_config.to_storage_dict() if self._train_config else {}
         backend = get_backend(self._train_config.backend_id) if self._train_config else get_backend()
         probe = backend.probe()
@@ -241,7 +275,7 @@ class TrainController:
             classes=classes,
             metrics=metrics,
             epochs=epochs,
-            dataset_size=self._dataset_size,
+            dataset_size=self._dataset_size_at_start,
             train_params=train_params,
             backend_id=backend.backend_id,
             model_format=backend.infer_model_format(model_path),

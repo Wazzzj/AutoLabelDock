@@ -20,7 +20,7 @@ def test_root_json_moves_to_mirrored_labels_when_root_image_is_moved(tmp_path):
     assert moved_images == 1
     assert moved_labels == 1
     assert (tmp_path / "images" / "sample.jpg").exists()
-    assert (tmp_path / "labels" / "sample.json").exists()
+    assert (tmp_path / "images" / "sample.json").exists()
     assert not image_path.exists()
     assert not json_path.exists()
 

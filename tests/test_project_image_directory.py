@@ -43,6 +43,50 @@ def test_set_image_directory_keeps_external_directory_absolute(tmp_path):
     assert project.image_root() == external.resolve()
 
 
+def test_create_project_discovers_image_root_children_as_data_versions(tmp_path):
+    image_root = tmp_path / "image-root"
+    (image_root / "version-a" / "camera-1").mkdir(parents=True)
+    (image_root / "version-b").mkdir()
+    (image_root / ".hidden").mkdir()
+
+    project = ProjectManager.create(
+        tmp_path / "project",
+        "project",
+        image_dir=str(image_root),
+    )
+
+    assert project.config.data_folders == ["version-a", "version-b"]
+    assert project.list_data_folders() == ["version-a", "version-b"]
+    assert "version-a/camera-1" not in project.list_data_folders()
+
+
+def test_project_artifact_directories_are_not_data_versions(tmp_path):
+    project_root = tmp_path / "project"
+    (project_root / "version-a").mkdir(parents=True)
+    for artifact in ("datasets", "models", "model_predictions", "runs", "crops"):
+        (project_root / artifact).mkdir()
+
+    project = ProjectManager.create(
+        project_root,
+        "project",
+        image_dir=".",
+    )
+
+    assert project.list_data_folders() == ["version-a"]
+
+
+def test_set_image_directory_registers_direct_children_as_data_versions(tmp_path):
+    project = ProjectManager.create(tmp_path / "project", "project")
+    image_root = tmp_path / "image-root"
+    (image_root / "test-1" / "nested").mkdir(parents=True)
+    (image_root / "test-2").mkdir()
+
+    project.set_image_directory(image_root)
+
+    assert project.config.data_folders == ["test-1", "test-2"]
+    assert project.list_data_folders() == ["test-1", "test-2"]
+
+
 def test_set_image_directory_rejects_missing_path(tmp_path):
     project = ProjectManager.create(tmp_path / "project", "project")
 

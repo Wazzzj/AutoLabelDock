@@ -13,7 +13,14 @@ from src.utils.colors import assign_color
 logger = logging.getLogger(__name__)
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp"}
-IGNORED_IMAGE_TREE_DIR_NAMES = {"model_predictions"}
+IGNORED_IMAGE_TREE_DIR_NAMES = {
+    "crops",
+    "datasets",
+    "labels",
+    "models",
+    "model_predictions",
+    "runs",
+}
 
 
 @dataclass
@@ -22,7 +29,9 @@ class ProjectConfig:
 
     name: str
     image_dir: str  # relative to project dir
-    label_dir: str  # relative to project dir
+    # "." means JSON sidecars live beside their images. Other values retain
+    # the legacy mirrored-label-directory layout.
+    label_dir: str
     classes: list[str]
     class_colors: dict[str, str] = field(default_factory=dict)
     keypoint_templates: dict[str, dict] = field(default_factory=dict)
@@ -150,8 +159,8 @@ class ProjectManager:
             if create_dirs and image_dir_str not in {"", "."}:
                 (project_dir / image_dir_str).mkdir(exist_ok=True)
 
-        label_dir = "labels"
-        if create_dirs:
+        label_dir = "."
+        if create_dirs and label_dir not in {"", "."}:
             (project_dir / label_dir).mkdir(exist_ok=True)
 
         config = ProjectConfig(
@@ -163,6 +172,7 @@ class ProjectManager:
             task_type=task_type,
         )
         pm = cls(project_dir, config)
+        pm.config.data_folders = pm._discover_root_data_folders()
         pm.save()
         return pm
 
@@ -216,8 +226,8 @@ class ProjectManager:
 
         self.config.image_dir = stored
         self.config.active_data_folder = ""
-        self.config.data_folders = []
         self.config.excluded_data_folders = []
+        self.config.data_folders = self._discover_root_data_folders()
         self.save()
         return selected
 
@@ -275,9 +285,45 @@ class ProjectManager:
             )
         ]
 
+    def _discover_root_data_folders(self) -> list[str]:
+        """Discover direct children of the image root as data versions.
+
+        A data version may contain its own nested directory layout.  Only the
+        first directory level is inferred automatically so those inner folders
+        are not exposed as additional, misleading versions.
+        """
+        img_dir = self.image_root()
+        if not img_dir.exists() or not img_dir.is_dir():
+            return []
+
+        label_dir = Path(self.config.label_dir)
+        if not label_dir.is_absolute():
+            label_dir = self.project_dir / label_dir
+        try:
+            label_dir = label_dir.resolve()
+        except OSError:
+            pass
+
+        folders: list[str] = []
+        for child in sorted(img_dir.iterdir(), key=lambda path: path.name.casefold()):
+            if not child.is_dir() or child.name.startswith("."):
+                continue
+            try:
+                if child.resolve() == label_dir:
+                    continue
+            except OSError:
+                pass
+            name = self._normalize_data_folder(child.name)
+            if (
+                name
+                and not self._is_ignored_data_folder(name)
+                and not self._is_excluded_data_folder(name)
+            ):
+                folders.append(name)
+        return folders
+
     def list_data_folders(self) -> list[str]:
         """List folders under image_dir that can be used as data versions."""
-        img_dir = self.image_root()
         folders: set[str] = set()
         for folder in self.config.data_folders:
             normalized = self._normalize_data_folder(folder)
@@ -287,27 +333,7 @@ class ProjectManager:
                 and not self._is_excluded_data_folder(normalized)
             ):
                 folders.add(normalized)
-        if not img_dir.exists():
-            return sorted(folders, key=lambda s: (s.count("/"), s.lower()))
-        label_dir = Path(self.config.label_dir)
-        if not label_dir.is_absolute():
-            label_dir = self.project_dir / label_dir
-        for p in img_dir.rglob("*"):
-            if not p.is_dir():
-                continue
-            try:
-                p.resolve().relative_to(label_dir.resolve())
-                continue
-            except ValueError:
-                pass
-            rel = p.relative_to(img_dir).as_posix()
-            if (
-                rel
-                and not self._is_ignored_data_folder(rel)
-                and not self._is_excluded_data_folder(rel)
-                and not any(part.startswith(".") for part in rel.split("/"))
-            ):
-                folders.add(rel)
+        folders.update(self._discover_root_data_folders())
         return sorted(folders, key=lambda s: (s.count("/"), s.lower()))
 
     def create_data_folder(self, folder: str) -> str:
@@ -339,16 +365,17 @@ class ProjectManager:
         dst.parent.mkdir(parents=True, exist_ok=True)
         src.rename(dst)
 
-        label_root = Path(self.config.label_dir)
-        if not label_root.is_absolute():
-            label_root = self.project_dir / label_root
-        old_label = label_root / Path(old_name)
-        new_label = label_root / Path(new_name)
-        if old_label.exists():
-            new_label.parent.mkdir(parents=True, exist_ok=True)
-            if new_label.exists():
-                raise FileExistsError(new_label)
-            old_label.rename(new_label)
+        if self.config.label_dir not in {"", "."}:
+            label_root = Path(self.config.label_dir)
+            if not label_root.is_absolute():
+                label_root = self.project_dir / label_root
+            old_label = label_root / Path(old_name)
+            new_label = label_root / Path(new_name)
+            if old_label.exists():
+                new_label.parent.mkdir(parents=True, exist_ok=True)
+                if new_label.exists():
+                    raise FileExistsError(new_label)
+                old_label.rename(new_label)
         if self.config.active_data_folder == old_name:
             self.config.active_data_folder = new_name
         updated: list[str] = []
@@ -512,6 +539,38 @@ class ProjectManager:
             self.config.data_folders = self.list_data_folders()
         return imported, skipped
 
+    def import_image_sidecar_annotations(self) -> int:
+        """Copy recognized JSON sidecars into the mirrored label directory.
+
+        Source sidecars are preserved. This is primarily used when an existing
+        directory tree becomes a project root, where annotations may still sit
+        beside their images in each data-version folder.
+        """
+        from src.core.label_io import load_annotation, save_annotation
+
+        imported = 0
+        image_root = self.image_root()
+        for image_path in self.list_images(data_folder=""):
+            source = image_path.with_suffix(".json")
+            destination = self.label_path_for(image_path)
+            if not source.exists() or destination.exists():
+                continue
+            try:
+                if source.resolve() == destination.resolve():
+                    continue
+            except OSError:
+                pass
+            annotation = load_annotation(source)
+            if annotation is None:
+                continue
+            try:
+                annotation.image_path = image_path.relative_to(image_root).as_posix()
+            except ValueError:
+                annotation.image_path = image_path.name
+            save_annotation(annotation, destination)
+            imported += 1
+        return imported
+
     def list_images(self, data_folder: str | None = None) -> list[Path]:
         """List image files in the active data-version folder, sorted by path."""
         img_dir = self.image_root()
@@ -538,6 +597,8 @@ class ProjectManager:
     def label_path_for(self, image_path: Path | str) -> Path:
         """Get the label JSON path for a given image."""
         image_path = Path(image_path)
+        if self.config.label_dir in {"", "."}:
+            return image_path.with_suffix(".json")
         label_dir = Path(self.config.label_dir)
         if not label_dir.is_absolute():
             label_dir = self.project_dir / label_dir

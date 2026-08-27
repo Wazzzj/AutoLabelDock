@@ -5,8 +5,11 @@ import logging
 import json
 import inspect
 import os
+import shutil
 import subprocess
 import sys
+import uuid
+from dataclasses import dataclass
 from pathlib import Path
 
 from PyQt5.QtWidgets import (
@@ -53,6 +56,7 @@ from src.ui.dialogs import BatchProgressDialog
 from src.ui.theme import PALETTE, set_button_role, set_surface, text_style
 from src.engine.dataset import count_selected_training_images
 from src.engine.model_manager import ModelRegistry
+from src.engine.trainer import TrainConfig
 from src.utils.workers import BatchPredictWorker
 from src.controllers.project import ProjectController
 from src.controllers.model import ModelController
@@ -60,10 +64,26 @@ from src.controllers.train import TrainController
 from src.controllers.tags import TagController
 from src.controllers.locateanything import LocateAnythingController
 from src.core.train_templates import TemplateRegistry
+from src.core.training_queue import TrainingQueue
 from src.ui.icons import app_icon, icon
 from src.ui.tag_widget import TagManagerDialog
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _TrainingJob:
+    """Immutable-enough snapshot of a train-panel submission."""
+
+    project: ProjectManager
+    task: str
+    config: TrainConfig
+    base_model: str
+    dataset_dir: Path
+    dataset_size: int
+    prepared_classes: list[str]
+    has_prepared_classes: bool
+    display_name: str
 
 
 _MOJIBAKE_CHARS = set(
@@ -527,6 +547,8 @@ class MainWindow(QMainWindow):
         self._batch_dialog: BatchProgressDialog | None = None
         # Background worker for single-image inference on slow backends (LA).
         self._single_worker = None
+        self._training_queue: TrainingQueue[_TrainingJob] = TrainingQueue()
+        self._training_batch_started_jobs = 0
 
         # Central widget
         self.tab_widget = QTabWidget()
@@ -539,7 +561,7 @@ class MainWindow(QMainWindow):
         self._welcome.recent_list.itemDoubleClicked.connect(self._on_recent_clicked)
         self._welcome.edit_project_requested.connect(self._on_edit_recent_project)
         self._welcome.remove_project_requested.connect(self._on_remove_recent_project)
-        self.tab_widget.addTab(self._welcome, icon("welcome"), "欢迎")
+        self.tab_widget.addTab(self._welcome, icon("welcome"), "主页")
         self._last_tab_widget = self._welcome
 
         self._setup_menus()
@@ -649,7 +671,7 @@ class MainWindow(QMainWindow):
         )
         self._select_image_dir_action.setShortcut("Ctrl+Shift+O")
         self._select_image_dir_action.setStatusTip(
-            "切换当前项目的图片来源目录，不复制或移动原图片"
+            "将所选目录中的图片添加到当前项目，并保留子目录结构"
         )
         self._select_image_dir_action.setEnabled(False)
         self._select_image_dir_action.triggered.connect(
@@ -766,6 +788,7 @@ class MainWindow(QMainWindow):
             )
             self._train_panel._btn_start.clicked.connect(self._on_start_training)
             self._train_panel.stop_requested.connect(self._on_stop_training)
+            self._train_panel.clear_queue_requested.connect(self._on_clear_training_queue)
             self._train_panel.preview_augmentation_requested.connect(self._on_preview_augmentation)
             self._train_panel.filter_changed.connect(self._on_train_tag_filter_changed)
             self._train_panel.set_template_registry(self._template_registry)
@@ -829,7 +852,7 @@ class MainWindow(QMainWindow):
         )
 
     def _on_select_image_directory(self) -> None:
-        """Select and persist a new image root for the current project."""
+        """Import an image directory into the current project image root."""
         if self._project is None:
             QMessageBox.information(self, "选择图片目录", "请先打开项目。")
             return
@@ -844,21 +867,41 @@ class MainWindow(QMainWindow):
             return
 
         selected_path = Path(selected).resolve()
+        current_root = current_root.resolve()
         try:
-            if selected_path == current_root.resolve():
-                self._status_label.setText(f"图片目录未变化: {selected_path}")
-                return
-        except OSError:
-            pass
+            selected_path.relative_to(current_root)
+            source_is_in_project = True
+        except ValueError:
+            source_is_in_project = False
+        try:
+            current_root.relative_to(selected_path)
+            source_contains_project = selected_path != current_root
+        except ValueError:
+            source_contains_project = False
+
+        if source_contains_project:
+            QMessageBox.warning(
+                self,
+                "添加图片目录失败",
+                "不能添加包含当前项目根目录的上级目录，请选择其中独立的图片目录。",
+            )
+            return
 
         if self._label_panel is not None:
             self._label_panel.save_and_cleanup()
 
         try:
-            image_root = self._project.set_image_directory(selected_path)
+            if source_is_in_project:
+                imported, skipped = [], []
+            else:
+                imported, skipped = self._project.import_images_to_folder(
+                    [selected_path],
+                    "",
+                )
+            self._project.save()
         except (OSError, ValueError) as exc:
-            logger.error("Failed to switch image directory: %s", exc, exc_info=True)
-            QMessageBox.warning(self, "选择图片目录失败", str(exc))
+            logger.error("Failed to import image directory: %s", exc, exc_info=True)
+            QMessageBox.warning(self, "添加图片目录失败", str(exc))
             return
 
         if self._label_panel is not None:
@@ -868,16 +911,21 @@ class MainWindow(QMainWindow):
         if self._train_panel is not None:
             self._train_panel.set_available_data_folders(
                 self._project.list_data_folders(),
-                default_folder="",
+                default_folder=self._project.config.active_data_folder,
                 preserve_selection=False,
             )
             self._sync_train_available_classes()
             self._refresh_train_filter_summary()
 
-        image_count = len(self._project.list_images())
-        self._status_label.setText(
-            f"已选择图片目录: {image_root} | 图片: {image_count} 张"
-        )
+        image_count = len(self._project.list_images(data_folder=""))
+        if source_is_in_project:
+            message = f"已重新扫描项目图片: {image_count} 张"
+        else:
+            message = (
+                f"已添加图片目录: 新增 {len(imported)} 张"
+                f"，跳过 {len(skipped)} 张 | 项目共 {image_count} 张"
+            )
+        self._status_label.setText(message)
 
     def _on_preview_edit_requested(self, path) -> None:
         if self._label_panel is None:
@@ -890,6 +938,12 @@ class MainWindow(QMainWindow):
             self._status_label.setText(f"未找到图片: {Path(path).name}")
 
     def _maybe_apply_detected_project_data(self, project_manager: ProjectManager) -> None:
+        # A registered data-version tree deliberately uses the project/image
+        # root as its stable base. A child folder containing many sidecar JSONs
+        # must not replace that root, otherwise selecting another version would
+        # incorrectly look below the detected child (for example seg/det).
+        if project_manager.config.data_folders:
+            return
         detected = best_project_data_candidate(project_manager)
         if detected is None:
             return
@@ -1263,12 +1317,13 @@ class MainWindow(QMainWindow):
         self._la_ctrl.disable()
         return True
 
-    def _on_model_load(self, model_id: str) -> None:
+    def _on_model_load(self, model_id: str, *, process_events: bool = True) -> None:
         if not self._confirm_disable_la_for_yolo("加载模型"):
             return
         if self._model_panel:
             self._model_panel.set_busy(True, "正在加载模型…")
-            QApplication.processEvents()
+            if process_events:
+                QApplication.processEvents()
         try:
             if self._model_ctrl.load_model(model_id):
                 model_info = self._model_ctrl.registry.get(model_id)
@@ -1907,98 +1962,240 @@ class MainWindow(QMainWindow):
 
     def _on_start_training(self) -> None:
         if not self._project or not self._train_panel:
+            if self._train_panel:
+                self._train_panel.reset_start_button_idle()
             return
-        # Controller-level guard: the disabled button is the primary UX signal,
-        # but project switches can rebind the start button to fresh state.
-        if self._train_ctrl.worker is not None and self._train_ctrl.worker.isRunning():
-            QMessageBox.warning(
-                self, "训练进行中",
-                "已有训练任务正在运行，请等待完成或先停止。",
-            )
-            # Restore button state in case the click slipped through.
-            self._train_panel._btn_start.setEnabled(False)
-            self._train_panel._btn_stop.setEnabled(True)
-            return
-        # YOLO↔LocateAnything mutual exclusion: training loads CUDA in *this*
-        # process, so a resident LA sidecar would contend for the same GPU.
-        # Close LA first (with user confirmation). ``_on_start`` already flipped
-        # the start button to the running state, so a decline must restore idle.
-        if not self._confirm_disable_la_for_yolo("开始训练"):
+        queue_was_idle = len(self._training_queue) == 0
+        # The first job needs the normal YOLO/LocateAnything hand-off. Further
+        # submissions are only snapshotted and do not touch the running worker.
+        if queue_was_idle and not self._confirm_disable_la_for_yolo("开始训练"):
             self._train_panel.reset_start_button_idle()
             return
+
+        dataset_dir: Path | None = None
         try:
             if self._label_panel:
                 self._label_panel.save_and_cleanup()
 
+            project = self._project
             task = self._train_panel._task_combo.currentText()
             val_ratio = self._train_panel.get_val_ratio()
             kpt_shape = None
             if task == "pose":
                 kpt_shape = [self._train_panel._kpt_num_spin.value(), self._train_panel._kpt_dim_spin.value()]
+            dataset_dir = (
+                project.project_dir
+                / "datasets"
+                / "training_queue"
+                / uuid.uuid4().hex
+            )
             data_yaml = self._train_ctrl.validate_and_prepare(
-                self._project, task, val_ratio,
+                project, task, val_ratio,
                 kpt_shape=kpt_shape,
                 tag_filter=self._train_panel.get_tag_filter(),
                 status_filter=self._train_panel.get_status_filter(),
                 class_filter=self._train_panel.get_class_filter(),
                 data_folder=self._train_panel.get_data_folder_filter(),
+                dataset_output_dir=dataset_dir,
             )
             if data_yaml is None:
-                self._train_panel._btn_start.setEnabled(True)
-                self._train_panel._btn_stop.setEnabled(False)
+                self._sync_training_queue_ui()
                 return
 
-            config = self._train_panel.get_train_config(data_yaml=data_yaml)
-            self._train_panel.save_last_train_settings()
             base_model = self._train_panel._resolve_model_path()
-            worker = self._train_ctrl.start(config, self._project, task, base_model=base_model)
-            worker.epoch_update.connect(self._train_panel.update_epoch)
+            base_model_path = Path(base_model)
+            project_model_path = project.project_dir / base_model_path
+            if not base_model_path.is_absolute() and project_model_path.is_file():
+                base_model = str(project_model_path.resolve())
+            config = self._train_panel.get_train_config(
+                data_yaml=data_yaml,
+                model=base_model,
+            )
+            self._train_panel.save_last_train_settings()
+            model_label = config.name or Path(base_model).stem or task
+            display_name = f"{project.config.name} / {model_label}"
+            job = _TrainingJob(
+                project=project,
+                task=task,
+                config=config,
+                base_model=base_model,
+                dataset_dir=dataset_dir,
+                dataset_size=self._train_ctrl.dataset_size,
+                prepared_classes=self._train_ctrl.prepared_classes,
+                has_prepared_classes=self._train_ctrl.has_prepared_classes,
+                display_name=display_name,
+            )
+            waiting_position = self._training_queue.enqueue(job)
+            if not queue_was_idle:
+                self._train_panel.append_log(
+                    f"已加入训练队列（等待 {waiting_position}）: {display_name}"
+                )
+            self._sync_training_queue_ui()
+            if self._training_queue.active is None:
+                self._start_next_training()
+        except (OSError, ValueError, RuntimeError) as e:
+            logger.error("Failed to queue training: %s", e, exc_info=True)
+            if dataset_dir is not None:
+                shutil.rmtree(dataset_dir, ignore_errors=True)
+            self._train_panel.on_queue_submission_error(str(e))
+            self._sync_training_queue_ui()
+
+    def _start_next_training(self) -> None:
+        if self._training_queue.active is not None:
+            return
+        job = self._training_queue.start_next()
+        if job is None:
+            self._training_batch_started_jobs = 0
+            self._sync_training_queue_ui()
+            return
+
+        clear_history = self._training_batch_started_jobs == 0
+        self._training_batch_started_jobs += 1
+        self._sync_training_queue_ui()
+        self._status_label.setText(
+            f"正在训练: {job.display_name} | 等待 {len(self._training_queue.waiting)}"
+        )
+        if self._train_panel:
+            self._train_panel.on_training_started(
+                job.display_name,
+                job.config.epochs,
+                clear_history=clear_history,
+            )
+            self._train_panel.append_log(
+                f"任务参数: {job.task} | {job.config.model} | "
+                f"{job.config.epochs} epochs"
+            )
+        try:
+            worker = self._train_ctrl.start(
+                job.config,
+                job.project,
+                job.task,
+                base_model=job.base_model,
+                dataset_size=job.dataset_size,
+                prepared_classes=job.prepared_classes,
+                has_prepared_classes=job.has_prepared_classes,
+            )
+            if self._train_panel:
+                worker.epoch_update.connect(self._train_panel.update_epoch)
             worker.finished_ok.connect(self._on_training_finished)
             worker.cancelled.connect(self._on_training_cancelled)
-            worker.error.connect(self._train_panel.on_training_error)
+            worker.error.connect(self._on_training_error)
+        except (OSError, ValueError, RuntimeError) as exc:
+            logger.error("Failed to start queued training: %s", exc, exc_info=True)
+            self._on_training_error(str(exc))
 
-            self._train_panel.append_log(f"开始训练: {task} | {config.model} | {config.epochs} epochs")
-        except (OSError, ValueError, RuntimeError) as e:
-            logger.error("Failed to start training: %s", e, exc_info=True)
-            self._train_panel.on_training_error(str(e))
+    def _sync_training_queue_ui(self) -> None:
+        if self._train_panel is None:
+            return
+        active = self._training_queue.active
+        self._train_panel.set_training_queue(
+            active.display_name if active else None,
+            [job.display_name for job in self._training_queue.waiting],
+        )
+
+    @staticmethod
+    def _cleanup_training_dataset(job: _TrainingJob | None) -> None:
+        if job is not None:
+            shutil.rmtree(job.dataset_dir, ignore_errors=True)
+
+    def _on_clear_training_queue(self) -> None:
+        removed = self._training_queue.clear_waiting()
+        for job in removed:
+            self._cleanup_training_dataset(job)
+        if removed and self._train_panel:
+            self._train_panel.append_log(f"已清空 {len(removed)} 个等待任务")
+        self._sync_training_queue_ui()
 
     def _on_stop_training(self) -> None:
+        removed = self._training_queue.clear_waiting()
+        for job in removed:
+            self._cleanup_training_dataset(job)
         self._train_ctrl.stop()
         if self._train_panel:
-            self._train_panel.append_log("正在停止训练...")
+            suffix = f"，并移除 {len(removed)} 个等待任务" if removed else ""
+            self._train_panel.append_log(f"正在停止当前训练{suffix}...")
+        self._sync_training_queue_ui()
+        if self._train_panel:
             self._train_panel._btn_stop.setEnabled(False)
 
     def _on_training_cancelled(self) -> None:
         if self._train_panel:
             self._train_panel.on_training_cancelled()
+        job, _had_multiple = self._training_queue.finish_active()
+        self._cleanup_training_dataset(job)
+        self._sync_training_queue_ui()
+        if self._training_queue.waiting:
+            self._start_next_training()
+        else:
+            self._training_batch_started_jobs = 0
+
+    def _on_training_error(self, error_msg: str) -> None:
+        if self._train_panel:
+            self._train_panel.on_training_error(error_msg)
+        job, _had_multiple = self._training_queue.finish_active()
+        self._cleanup_training_dataset(job)
+        self._status_label.setText(f"训练失败: {error_msg}")
+        self._sync_training_queue_ui()
+        if self._training_queue.waiting:
+            self._start_next_training()
+        else:
+            self._training_batch_started_jobs = 0
 
     def _on_training_finished(self, metrics: dict) -> None:
         if self._train_panel:
             self._train_panel.on_training_finished(metrics)
-        model_info = self._train_ctrl.register_model_after_training(metrics)
-        if model_info is None:
-            return
+        try:
+            model_info = self._train_ctrl.register_model_after_training(metrics)
+        except Exception as exc:  # noqa: BLE001 - keep the remaining queue moving
+            logger.exception("Failed to register trained model")
+            model_info = None
+            if self._train_panel:
+                self._train_panel.append_log(f"--- 模型注册失败: {exc} ---")
+            self._status_label.setText(f"训练完成，但模型注册失败: {exc}")
+        finished_job, batch_had_multiple = self._training_queue.finish_active()
+        self._cleanup_training_dataset(finished_job)
         project_at_start = self._train_ctrl.project_at_start
         same_project = (
             self._project is not None
             and project_at_start is not None
             and project_at_start.project_dir == self._project.project_dir
         )
-        if same_project:
+        if model_info is not None and same_project:
             # register_model_after_training wrote to disk via a fresh registry
             # bound to the snapshot project; reload our in-memory copy so the
             # model panel picks up the new entry.
             if self._model_registry is not None:
                 self._model_registry.load()
             self._refresh_model_lists()
-            self._status_label.setText(
-                f"训练完成，模型已注册: {model_info.name}。如需推理，请在模型页手动加载。"
-            )
-        else:
+            if not batch_had_multiple:
+                # Avoid a nested event loop while the completed queue item is
+                # still being finalized; otherwise a click could enqueue and
+                # start another batch inside this completion callback.
+                self._on_model_load(model_info.id, process_events=False)
+                loaded_model = self._model_ctrl.current_model_info
+                if loaded_model is not None and loaded_model.id == model_info.id:
+                    self._status_label.setText(
+                        f"训练完成，模型已注册并自动加载: {model_info.name}"
+                    )
+                else:
+                    self._status_label.setText(
+                        f"训练完成，模型已注册但自动加载失败: {model_info.name}"
+                    )
+            else:
+                self._status_label.setText(
+                    f"训练完成，模型已注册: {model_info.name}。"
+                    "当前为多任务队列，未自动加载。"
+                )
+        elif model_info is not None:
             proj_name = project_at_start.config.name if project_at_start else "原项目"
             self._status_label.setText(
                 f"训练完成: 模型已注册到项目「{proj_name}」({model_info.name})"
             )
+        self._sync_training_queue_ui()
+        if self._training_queue.waiting:
+            self._start_next_training()
+        else:
+            self._training_batch_started_jobs = 0
 
     # ── Lifecycle ────────────────────────────────────────────
 
@@ -2017,8 +2214,11 @@ class MainWindow(QMainWindow):
             if reply != QMessageBox.Yes:
                 event.ignore()
                 return
+            for queued_job in self._training_queue.clear_waiting():
+                self._cleanup_training_dataset(queued_job)
             self._train_ctrl.stop()
-            worker.wait(30000)
+            if worker.wait(30000):
+                self._cleanup_training_dataset(self._training_queue.active)
         # Wait for any in-flight single-image inference (slow backend) so the
         # worker isn't using the predictor while we release it below.
         if self._single_worker is not None and self._single_worker.isRunning():

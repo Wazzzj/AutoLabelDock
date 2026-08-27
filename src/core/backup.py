@@ -34,7 +34,7 @@ class BackupManager:
         Returns the backup directory path, or None if nothing to back up.
         """
         project_json = self._project_dir / "project.json"
-        labels_dir = self._project_dir / label_dir
+        labels_dir = self._resolve_label_root(label_dir)
 
         if not project_json.exists():
             return None
@@ -48,10 +48,12 @@ class BackupManager:
 
         # Back up label files
         if labels_dir.exists():
-            dest_labels = dest / label_dir
-            dest_labels.mkdir(exist_ok=True)
-            for f in labels_dir.glob("*.json"):
-                shutil.copy2(f, dest_labels / f.name)
+            dest_labels = dest / "labels"
+            for f in self._iter_label_files(label_dir):
+                rel = f.relative_to(labels_dir)
+                target = dest_labels / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(f, target)
 
         self._prune_old_backups()
         logger.info("Backup created: %s", dest.name)
@@ -72,7 +74,7 @@ class BackupManager:
             if not pj.exists():
                 continue
             labels_dir = d / "labels"
-            label_count = len(list(labels_dir.glob("*.json"))) if labels_dir.exists() else 0
+            label_count = len(list(labels_dir.rglob("*.json"))) if labels_dir.exists() else 0
             backups.append({
                 "name": d.name,
                 "path": d,
@@ -99,30 +101,63 @@ class BackupManager:
         pj = self._project_dir / "project.json"
         if pj.exists():
             shutil.copy2(pj, safety / "project.json")
-        cur_labels = self._project_dir / label_dir
+        cur_labels = self._resolve_label_root(label_dir)
         if cur_labels.exists():
-            safety_labels = safety / label_dir
-            safety_labels.mkdir(exist_ok=True)
-            for f in cur_labels.glob("*.json"):
-                shutil.copy2(f, safety_labels / f.name)
+            safety_labels = safety / "labels"
+            for f in self._iter_label_files(label_dir):
+                rel = f.relative_to(cur_labels)
+                target = safety_labels / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(f, target)
 
         # Restore project.json
         shutil.copy2(src / "project.json", self._project_dir / "project.json")
 
         # Restore labels
-        src_labels = src / label_dir
+        src_labels = src / "labels"
         if src_labels.exists():
-            dest_labels = self._project_dir / label_dir
+            dest_labels = self._resolve_label_root(label_dir)
             dest_labels.mkdir(exist_ok=True)
             # Clear current labels
-            for f in dest_labels.glob("*.json"):
+            for f in self._iter_label_files(label_dir):
                 f.unlink()
             # Copy backup labels
-            for f in src_labels.glob("*.json"):
-                shutil.copy2(f, dest_labels / f.name)
+            for f in src_labels.rglob("*.json"):
+                target = dest_labels / f.relative_to(src_labels)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(f, target)
 
         logger.info("Restored backup: %s", backup_name)
         return True
+
+    def _resolve_label_root(self, label_dir: str) -> Path:
+        path = Path(label_dir)
+        if path.is_absolute():
+            return path
+        return self._project_dir if label_dir in {"", "."} else self._project_dir / path
+
+    def _iter_label_files(self, label_dir: str):
+        """Yield internal JSON labels for mirrored and sidecar storage modes."""
+        root = self._resolve_label_root(label_dir)
+        if not root.exists():
+            return
+        if label_dir not in {"", "."}:
+            yield from sorted(root.rglob("*.json"))
+            return
+
+        image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp"}
+        seen: set[Path] = set()
+        for image in root.rglob("*"):
+            if (
+                not image.is_file()
+                or image.suffix.lower() not in image_extensions
+                or ".backups" in image.parts
+            ):
+                continue
+            sidecar = image.with_suffix(".json")
+            if sidecar.exists() and sidecar not in seen:
+                seen.add(sidecar)
+                yield sidecar
 
     def _prune_old_backups(self) -> None:
         """Remove oldest backups to stay within max_backups limit."""
