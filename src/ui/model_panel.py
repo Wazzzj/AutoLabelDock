@@ -21,6 +21,7 @@ from PyQt5.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
     QSpinBox,
+    QProgressBar,
     QSizePolicy,
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QUrl
@@ -43,6 +44,12 @@ _DEVICE_OPTIONS = {
     "CPU": "cpu",
 }
 _DEVICE_VALUE_TO_LABEL = {value: label for label, value in _DEVICE_OPTIONS.items()}
+
+_MONO = '"Menlo", "SF Mono", "Consolas", "monospace"'
+
+# 模型行卡片指标键（有序候选，从 model.metrics 提取）
+_METRIC_MAP50 = ("metrics/mAP50(B)", "metrics/mAP50(M)", "metrics/mAP50(P)", "mAP50")
+_METRIC_MAP50_95 = ("metrics/mAP50-95(B)", "metrics/mAP50-95(M)", "metrics/mAP50-95(P)", "mAP50-95")
 
 
 _BASE_PARAM_GROUPS: list[tuple[str, list[str]]] = [
@@ -136,6 +143,7 @@ class ModelPanel(QWidget):
         self._predict_image_paths: list[Path] = []
         self._predict_image_index: int = -1
         self._last_predict_result_dir: Path | None = None
+        self._current_model_name = ""
         self._selected_train_dir: Path | None = None
         self._init_ui()
         self._connect_signals()
@@ -162,6 +170,11 @@ class ModelPanel(QWidget):
 
         self._model_list = QListWidget()
         self._model_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self._model_list.setStyleSheet(
+            "QListWidget { background: transparent; border: none; }"
+            "QListWidget::item { background: transparent; border: none; padding: 0; margin: 0 0 4px 0; }"
+            "QListWidget::item:selected { background: transparent; }"
+        )
         list_layout.addWidget(self._model_list)
 
         btn_layout = QHBoxLayout()
@@ -185,11 +198,39 @@ class ModelPanel(QWidget):
         self._btn_export_onnx.setToolTip("将选中的 .pt 模型转换为 ONNX 并保存到指定位置")
         btn_layout.addWidget(self._btn_load)
         btn_layout.addWidget(self._btn_delete)
-        btn_layout.addWidget(self._btn_rename)
-        btn_layout.addWidget(self._btn_import)
-        btn_layout.addWidget(self._btn_export_pt)
-        btn_layout.addWidget(self._btn_export_onnx)
-        list_layout.addLayout(btn_layout)
+
+        # 顶部工具条 subbar（设计稿 a-models：导入 / 对比 / 导出）
+        # 选中模型操作：加载 / 删除（并入顶部工具条）
+        self._btn_load.setFixedHeight(30)
+        self._btn_delete.setFixedHeight(30)
+        self._subbar = QWidget()
+        self._subbar.setObjectName("modelSubbar")
+        self._subbar.setStyleSheet(
+            "#modelSubbar { background: %s; border: 1px solid %s; border-radius: 8px; }"
+            % (PALETTE["panel"], PALETTE["line"])
+        )
+        subbar_layout = QHBoxLayout(self._subbar)
+        subbar_layout.setContentsMargins(8, 6, 8, 6)
+        subbar_layout.setSpacing(4)
+        # 设计稿 subbar 工具按钮：描边 icon+文字、hover 主色
+        subbar_btn_qss = (
+            "QPushButton{background:transparent;border:1px solid transparent;"
+            f"border-radius:6px;color:{PALETTE['text_muted']};font-size:12px;"
+            "padding:0 10px;height:30px;font-weight:600;}"
+            f"QPushButton:hover{{color:{PALETTE['primary']};"
+            f"border:1px solid {PALETTE['line_strong']};}}"
+        )
+        for b in (self._btn_load, self._btn_delete, self._btn_import,
+                  self._btn_export_pt, self._btn_export_onnx, self._btn_rename):
+            b.setFixedHeight(30)
+            b.setStyleSheet(subbar_btn_qss)
+            subbar_layout.addWidget(b)
+        subbar_layout.addStretch(1)
+        subbar_note = QLabel("按 mAP50 排序 ↓")
+        subbar_note.setStyleSheet(
+            f"color:{PALETTE['text_subtle']};font-size:11.5px;"
+        )
+        subbar_layout.addWidget(subbar_note)
 
         # Model details
         self._detail_group = QGroupBox("模型详情")
@@ -264,7 +305,7 @@ class ModelPanel(QWidget):
         self._class_match_mode_combo.setToolTip("控制自动标注时模型类别与项目类别的匹配方式")
         auto_form.addRow("类别匹配方式:", self._class_match_mode_combo)
 
-        left_layout.addWidget(auto_group)
+        right_layout.addWidget(auto_group, 0)
 
         # Current model indicator
         self._current_label = QLabel("当前模型: 无")
@@ -279,7 +320,7 @@ class ModelPanel(QWidget):
 
 
         self._predict_canvas = AnnotationCanvas()
-        self._predict_canvas.setMinimumHeight(360)
+        self._predict_canvas.setMinimumHeight(200)
         self._predict_canvas.setSizePolicy(
             QSizePolicy.Expanding,
             QSizePolicy.Expanding,
@@ -376,13 +417,15 @@ class ModelPanel(QWidget):
         infer_action_btns.addWidget(self._btn_predict_image, 1)
         infer_action_btns.addWidget(self._btn_open_predict_result_dir, 1)
         infer_layout.addLayout(infer_action_btns)
-        left_layout.insertWidget(0, infer_group, 2)
-        right_layout.addWidget(list_group, 2)
-
+        # 主区 = 模型注册网格（mrow 铺开）+ 推理预览（下部）；检查器 = 详情 / 自动标注
+        left_layout.addWidget(list_group, 1)
         left_layout.addStretch()
-        right_layout.addStretch()
-        body.addWidget(left_col, 2)
-        body.addWidget(right_col, 1)
+        right_layout.addWidget(infer_group, 1)
+        right_col.setFixedWidth(292)
+        right_col.setMaximumWidth(292)
+        body.addWidget(left_col, 1)
+        body.addWidget(right_col, 0)
+        layout.addWidget(self._subbar, 0)
         layout.addLayout(body, 1)
 
     def _connect_signals(self) -> None:
@@ -405,30 +448,163 @@ class ModelPanel(QWidget):
         self._project_dir = Path(project_dir) if project_dir else None
 
     def set_models(self, models: list[ModelInfo]) -> None:
-        """Update the model list."""
+        """Update the model registry as mrow-style cards (设计稿 a-models.html)."""
         self._models = list(models)
         self._model_list.blockSignals(True)
         self._model_list.clear()
 
-        task_colors = {
-            "detect": PALETTE["primary"],
-            "segment": PALETTE["teal"],
-            "classify": PALETTE["success"],
-            "pose": PALETTE["violet"],
-        }
         for model in models:
-            color = task_colors.get(model.task, PALETTE["text"])
-            item = QListWidgetItem(f"[{model.task}] {model.name}")
+            item = QListWidgetItem()
             item.setData(Qt.UserRole, model.id)
-            item.setForeground(QColor(color))
+            row = self._build_model_row(model)
+            item.setSizeHint(row.sizeHint())
             self._model_list.addItem(item)
+            self._model_list.setItemWidget(item, row)
 
         self._model_list.blockSignals(False)
         logger.info("Model list updated: %d models", len(models))
 
+    @staticmethod
+    def _nick_metric(metrics: dict, keys: tuple[str, ...]) -> float | None:
+        for k in keys:
+            if k in metrics:
+                try:
+                    return float(metrics[k])
+                except (TypeError, ValueError):
+                    continue
+        return None
+
+    def _build_model_row(self, model: ModelInfo) -> QWidget:
+        """mrow 卡片：图标 + 名称/描述 + mAP50 / mAP50-95 指标条 + 操作按钮。"""
+        row = QWidget()
+        row.setObjectName("modelRow")
+        row.setStyleSheet(
+            "QWidget#modelRow { background: %s; border: 1px solid %s; border-radius: 10px; }"
+            "QWidget#modelRow QLabel { background: transparent; border: none; }"
+            % (PALETTE["panel"], PALETTE["line"])
+        )
+        lay = QHBoxLayout(row)
+        lay.setContentsMargins(14, 12, 14, 12)
+        lay.setSpacing(10)
+
+        # 图标
+        ico = QLabel()
+        task_color = {
+            "detect": PALETTE["primary"], "segment": PALETTE["teal"],
+            "classify": PALETTE["success"], "pose": PALETTE["violet"],
+        }.get(model.task, PALETTE["text_muted"])
+        ico.setPixmap(icon("model_tab", task_color, 22).pixmap(20, 20))
+        lay.addWidget(ico)
+
+        # 名称 + 描述
+        name_col = QVBoxLayout()
+        name_col.setSpacing(2)
+        task_tag = QLabel(model.task)
+        task_tag.setStyleSheet(
+            f"color:{task_color};background:{PALETTE['primary_soft']};"
+            f"font-size:9.5px;font-weight:600;border-radius:4px;padding:1px 6px;"
+        )
+        name_row = QHBoxLayout()
+        name_row.setSpacing(6)
+        name_lbl = QLabel(model.name)
+        name_lbl.setStyleSheet(f"color:{PALETTE['text']};font-size:13px;font-weight:600;")
+        name_row.addWidget(name_lbl)
+        if self._current_model_name and model.name == self._current_model_name:
+            loaded = QLabel("● 已加载")
+            loaded.setStyleSheet(
+                f"color:{PALETTE['success']};font-size:10px;font-weight:600;"
+            )
+            name_row.addWidget(loaded)
+        name_row.addWidget(task_tag)
+        name_row.addStretch()
+        name_col.addLayout(name_row)
+        desc = QLabel(
+            f"{model.base_model or '—'} · {model.epochs or 0} epochs · "
+            f"{model.dataset_size or 0} 张"
+        )
+        desc.setStyleSheet(
+            f"color:{PALETTE['text_subtle']};font-size:10.5px;font-family:{_MONO};"
+        )
+        name_col.addWidget(desc)
+        lay.addLayout(name_col, 1)
+
+        # 指标列：mAP50 / mAP50-95（带进度条） + 推理耗时（设计稿三列）
+        m50 = self._nick_metric(model.metrics, _METRIC_MAP50)
+        m5095 = self._nick_metric(model.metrics, _METRIC_MAP50_95)
+        for value, label, bar_color in (
+            (m50, "mAP50", PALETTE["success"]),
+            (m5095, "mAP50-95", PALETTE["primary"]),
+        ):
+            col = QVBoxLayout()
+            col.setSpacing(3)
+            vb = QLabel(f"{value:.3f}" if value is not None else "—")
+            vb.setStyleSheet(
+                f"color:{PALETTE['text']};font-size:13px;font-weight:700;font-family:{_MONO};"
+            )
+            vk = QLabel(label)
+            vk.setStyleSheet(f"color:{PALETTE['text_subtle']};font-size:10px;")
+            col.addWidget(vb)
+            col.addWidget(vk)
+            bar = QProgressBar()
+            bar.setRange(0, 100)
+            bar.setValue(int((value or 0) * 100))
+            bar.setFixedHeight(4)
+            bar.setTextVisible(False)
+            bar.setStyleSheet(
+                "QProgressBar{background:%s;border:none;border-radius:2px;}"
+                "QProgressBar::chunk{background:%s;border-radius:2px;}"
+                % (PALETTE["line"], bar_color)
+            )
+            col.addWidget(bar)
+            lay.addLayout(col)
+        lat_col = QVBoxLayout()
+        lat_col.setSpacing(3)
+        lat_v = QLabel("— ms")
+        lat_v.setStyleSheet(
+            f"color:{PALETTE['text']};font-size:13px;font-weight:700;font-family:{_MONO};"
+        )
+        lat_k = QLabel("推理/张")
+        lat_k.setStyleSheet(f"color:{PALETTE['text_subtle']};font-size:10px;")
+        lat_col.addWidget(lat_v)
+        lat_col.addWidget(lat_k)
+        lay.addLayout(lat_col)
+
+        # 操作按钮：加载 / 删除（设计稿 mbtn）
+        load_btn = QPushButton("加载")
+        load_btn.setObjectName("modelActionBtn")
+        set_button_role(load_btn, "secondary")
+        load_btn.setStyleSheet(
+            "QPushButton{background:transparent;border:1px solid %s;border-radius:6px;"
+            "color:%s;font-size:11px;padding:0 9px;height:26px;}"
+            "QPushButton:hover{border-color:%s;color:%s;}"
+            % (PALETTE["line_strong"], PALETTE["text_muted"],
+               PALETTE["primary"], PALETTE["primary"])
+        )
+        load_btn.clicked.connect(lambda _=False, mid=model.id: self.model_load_requested.emit(mid))
+        del_btn = QPushButton("删除")
+        del_btn.setObjectName("modelActionBtn")
+        del_btn.setStyleSheet(
+            "QPushButton{background:transparent;border:1px solid %s;border-radius:6px;"
+            "color:%s;font-size:11px;padding:0 9px;height:26px;}"
+            "QPushButton:hover{border-color:%s;color:%s;}"
+            % (PALETTE["line_strong"], PALETTE["text_muted"],
+               PALETTE["danger"], PALETTE["danger"])
+        )
+        del_btn.clicked.connect(lambda _=False, mid=model.id: self.model_delete_requested.emit(mid))
+        lay.addWidget(load_btn)
+        lay.addWidget(del_btn)
+        return row
+
     def set_current_model_name(self, name: str) -> None:
         """Display the currently loaded model name."""
-        self._current_label.setText(f"当前模型: {name}")
+        self._current_model_name = str(name or "")
+        self._current_label.setText(f"当前模型: {self._current_model_name}")
+        # 重建卡片列表，让 mrow 同步显示"● 已加载"标记（对齐原型）
+        if self._models and self._current_model_name:
+            try:
+                self.set_models(self._models)
+            except Exception:
+                logger.exception("refresh model rows after load")
 
     def set_predict_imgsz(self, imgsz: int) -> None:
         """Update the inference image-size control."""
@@ -593,7 +769,7 @@ class ModelPanel(QWidget):
                 backend_parts.append(model.backend_version)
             backend_text = " ".join(backend_parts)
             self._detail_backend.setText(backend_text)
-            self._detail_backend.setStyleSheet("color: #6c7086; font-size: 11px;")  # gray, smaller
+            self._detail_backend.setStyleSheet("color: #5E7A9F; font-size: 11px;")  # gray, smaller
 
             self._detail_train_params.setText(
                 _format_train_params(model.train_params, model.task)

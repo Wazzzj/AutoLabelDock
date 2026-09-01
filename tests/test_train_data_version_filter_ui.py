@@ -8,8 +8,14 @@ from src.core.config import AppConfig
 from src.ui.train_panel import TrainPanel
 
 
+_APP = None
+
+
 def _qapp():
-    return QApplication.instance() or QApplication([])
+    global _APP
+    if _APP is None:
+        _APP = QApplication.instance() or QApplication([])
+    return _APP
 
 
 def test_train_data_version_selection_is_saved_and_restored(tmp_path):

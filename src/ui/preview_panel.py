@@ -297,7 +297,7 @@ def _image_matches_annotation_filters(
 def _summary_for_annotation(
     ia: ImageAnnotation,
     class_colors: dict[str, str],
-    default_color: str = "#6c7086",
+    default_color: str = "#5E7A9F",
 ) -> PreviewSummary:
     """Return compact status text for a preview tile."""
     if ia.image_tags:
@@ -756,7 +756,7 @@ class PreviewDelegate(QStyledItemDelegate):
     def _draw_label(self, painter: QPainter, rect: QRect, index) -> None:
         summary: PreviewSummary | None = index.data(_SUMMARY_ROLE)
         if summary is None:
-            summary = PreviewSummary("未标注", "unlabeled", "#6c7086")
+            summary = PreviewSummary("未标注", "unlabeled", "#5E7A9F")
 
         label_rect = QRect(
             rect.x() + _CARD_PAD,

@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>方案 A · 主页 — AutoLabel Dock 重设计</title>
+<style>
+:root{
+  --bg:#0B0F16;--bg-deep:#070A10;--panel:#101623;--panel-2:#141C2C;--line:#1E2838;--line-strong:#2C3A50;
+  --text:#E8EEF7;--text-2:#9FB0C8;--text-3:#5D6E88;--accent:#4D9FFF;--accent-dim:#1E3A5F;
+  --ok:#3ECF8E;--warn:#F5B83D;--bad:#F16A5D;--mono:"SF Mono",ui-monospace,Menlo,monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,"PingFang SC","Noto Sans SC",sans-serif;
+  font-size:13px;overflow:hidden;-webkit-font-smoothing:antialiased}
+.app{display:grid;grid-template-columns:56px 1fr 292px;grid-template-rows:44px 1fr 34px;height:100vh;
+  grid-template-areas:"rail topbar topbar" "rail main inspector" "rail tasks tasks"}
+.rail{grid-area:rail;background:var(--bg-deep);border-right:1px solid var(--line);display:flex;flex-direction:column;
+  align-items:center;padding:10px 0 12px;gap:2px;z-index:30}
+.logo{width:34px;height:34px;margin-bottom:10px}
+.nav-btn{width:42px;height:42px;border-radius:10px;display:flex;align-items:center;justify-content:center;color:var(--text-3);
+  cursor:pointer;position:relative;margin-bottom:2px;border:1px solid transparent;transition:all .15s}
+.nav-btn:hover{color:var(--text-2);background:var(--panel)}
+.nav-btn.active{color:var(--accent);background:var(--accent-dim);border-color:#2B4A75}
+.nav-tip{position:absolute;left:52px;top:50%;transform:translateY(-50%);background:#1A2334;border:1px solid var(--line-strong);
+  padding:5px 9px;border-radius:6px;font-size:12px;white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .12s;z-index:99}
+.nav-btn:hover .nav-tip{opacity:1}
+.rail-ic{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.rail-spacer{flex:1}
+.loop-ring{width:40px;height:40px;position:relative;cursor:pointer;margin-bottom:8px}
+.loop-ring .nav-tip{width:170px}
+.rail-gear{position:absolute}
+.topbar{grid-area:topbar;background:var(--panel);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:14px;padding:0 14px}
+.proj{display:flex;align-items:center;gap:9px;padding:5px 10px 5px 6px;border-radius:8px;cursor:pointer;border:1px solid transparent}
+.proj:hover{background:var(--panel-2);border-color:var(--line)}
+.proj-dot{width:22px;height:22px;border-radius:6px;background:linear-gradient(135deg,#1D3A63,#123252);display:flex;
+  align-items:center;justify-content:center;font-size:10px;color:var(--accent);font-weight:700}
+.proj b{font-size:13px;font-weight:600}
+.proj svg{width:12px;height:12px;stroke:var(--text-3)}
+.cmdk{flex:1;max-width:420px;height:28px;background:var(--bg);border:1px solid var(--line);border-radius:7px;display:flex;
+  align-items:center;gap:8px;padding:0 10px;color:var(--text-3)}
+.cmdk svg{width:13px;height:13px;stroke:var(--text-3)}
+.cmdk span{font-size:12px}
+.cmdk kbd{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--text-3);border:1px solid var(--line-strong);
+  border-radius:4px;padding:1px 5px}
+.chip{display:flex;align-items:center;gap:6px;height:26px;padding:0 10px;border-radius:7px;background:var(--bg);
+  border:1px solid var(--line);font-size:11.5px;color:var(--text-2)}
+.chip .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);box-shadow:0 0 5px var(--ok)}
+.chip b{color:var(--text);font-weight:600}
+/* 主区 */
+.main{grid-area:main;overflow-y:auto;padding:26px 30px;background:
+  radial-gradient(900px 480px at 24% -8%, rgba(77,159,255,.06), transparent 60%), var(--bg)}
+.hero-h{font-size:22px;font-weight:700;letter-spacing:.01em}
+.hero-h em{font-style:normal;color:var(--accent)}
+.hero-sub{color:var(--text-3);font-size:12.5px;margin:6px 0 22px}
+.sec-h{display:flex;align-items:center;gap:10px;margin:20px 0 12px}
+.sec-h .t{font-size:10.5px;font-weight:700;letter-spacing:.14em;color:var(--text-3)}
+.sec-h .n{font-family:var(--mono);font-size:10.5px;color:var(--text-3);border:1px solid var(--line);border-radius:5px;padding:1px 7px}
+.search{margin-left:auto;display:flex;align-items:center;gap:7px;background:var(--panel);border:1px solid var(--line);
+  border-radius:8px;height:30px;padding:0 10px;width:230px;color:var(--text-3)}
+.search svg{width:13px;height:13px;stroke:var(--text-3)}
+.search span{font-size:12px}
+.pgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.pcard{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 16px 14px;cursor:pointer;transition:border-color .15s}
+.pcard:hover{border-color:var(--accent)}
+.pcard .ph{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.pcard .pd{width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px}
+.pcard .nm b{font-size:14px;display:block}
+.pcard .nm small{color:var(--text-3);font-size:10.5px;font-family:var(--mono)}
+.pcard .tt{font-size:9.5px;font-weight:700;letter-spacing:.1em;border-radius:4px;padding:1px 6px;margin-left:auto}
+.pcard .stats{display:flex;gap:14px;font-size:11px;color:var(--text-2);margin-bottom:10px}
+.pcard .stats b{font-family:var(--mono);color:var(--text);font-size:12px;display:block}
+.pcard .stats small{color:var(--text-3);font-size:10px}
+.pbar{height:4px;border-radius:2px;background:var(--line);overflow:hidden;display:flex}
+.pbar i{height:100%}
+.pcard .pm{display:flex;gap:10px;margin-top:6px;font-size:10px;color:var(--text-3)}
+.pcard .pm i{display:inline-block;width:7px;height:7px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+/* 检查器 */
+.inspector{grid-area:inspector;background:var(--panel);border-left:1px solid var(--line);overflow-y:auto}
+.insp-sec{border-bottom:1px solid var(--line);padding:14px}
+.insp-h{font-size:10.5px;font-weight:600;letter-spacing:.12em;color:var(--text-3);text-transform:uppercase;margin-bottom:11px}
+.bigbtn{height:38px;border-radius:9px;border:1px solid var(--line-strong);background:var(--panel-2);color:var(--text);
+  font-size:13px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;width:100%;margin-bottom:8px}
+.bigbtn:hover{border-color:var(--accent);color:var(--accent)}
+.bigbtn.primary{background:var(--accent);border-color:var(--accent);color:#04121F;font-weight:600}
+.bigbtn.primary:hover{background:#66ADFF;color:#04121F}
+.bigbtn svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.hint{font-size:11.5px;color:var(--text-3);line-height:1.7}
+.hint b{color:var(--text-2)}
+kbd{font-family:var(--mono);font-size:10px;color:var(--text-2);border:1px solid var(--line-strong);border-radius:4px;padding:1px 5px}
+/* 任务条 */
+.tasks{grid-area:tasks;background:var(--bg-deep);border-top:1px solid var(--line);display:flex;align-items:center;
+  padding:0 14px;gap:18px;font-size:11.5px;color:var(--text-3)}
+.tstat{margin-left:auto;display:flex;gap:16px;font-family:var(--mono);font-size:10.5px;color:var(--text-3)}
+</style>
+</head>
+<body>
+<div class="app">
+  <nav class="rail">
+    <svg class="logo" viewBox="0 0 34 34" width="34" height="34">
+      <circle cx="17" cy="17" r="14" fill="none" stroke="#24344E" stroke-width="2"/>
+      <circle cx="17" cy="17" r="8.5" fill="none" stroke="#4D9FFF" stroke-width="2"/><circle cx="17" cy="17" r="2.6" fill="#4D9FFF"/>
+    </svg>
+    <div class="nav-btn active"><svg class="rail-ic" viewBox="0 0 24 24"><path d="M3 11l9-8 9 8M5 10v10h5v-6h4v6h5V10"/></svg><span class="nav-tip">主页</span></div>
+    <div class="nav-btn"><svg class="rail-ic" viewBox="0 0 24 24"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg><span class="nav-tip">标注</span></div>
+    <div class="nav-btn"><svg class="rail-ic" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><span class="nav-tip">预览</span></div>
+    <div class="nav-btn"><svg class="rail-ic" viewBox="0 0 24 24"><path d="M3 17l5-6 4 4 6-8 3 4"/><path d="M3 21h18"/></svg><span class="nav-tip">训练</span></div>
+    <div class="nav-btn"><svg class="rail-ic" viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg><span class="nav-tip">模型</span></div>
+    <div class="nav-btn"><svg class="rail-ic" viewBox="0 0 24 24"><path d="M8 9l-4 3 4 3M16 9l4 3-4 3M13 5l-2 14"/></svg><span class="nav-tip">小工具</span></div>
+    <div class="rail-spacer"></div>
+    <div class="loop-ring">
+      <span class="nav-tip"><b style="color:var(--text)">打开项目后</b><br>此处显示闭环进度</span>
+      <svg viewBox="0 0 40 40" width="40" height="40">
+        <circle cx="20" cy="20" r="16" fill="none" stroke="#1B2536" stroke-width="3.5"/>
+        <circle cx="20" cy="20" r="9" fill="none" stroke="#24344E" stroke-width="1.5" stroke-dasharray="2 3"/>
+      </svg>
+    </div>
+    <div class="nav-btn"><svg class="rail-ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2z"/></svg><span class="nav-tip">设置</span></div>
+  </nav>
+
+  <header class="topbar">
+    <div class="proj"><div class="proj-dot">＋</div><b>选择项目…</b>
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></div>
+    <div class="cmdk"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+      <span>搜索图片、类别、模型或命令…</span><kbd>⌘K</kbd></div>
+    <div style="margin-left:auto;display:flex;gap:8px">
+      <span class="chip"><span class="dot"></span> CUDA:0 空闲</span>
+      <span class="chip">v0.1.0</span>
+    </div>
+  </header>
+
+  <main class="main">
+    <div class="hero-h">继续你的<em>标注闭环</em></div>
+    <div class="hero-sub">标注 → 训练 → 自动预标注 → 再标注。选择一个最近项目继续，或新建。</div>
+
+    <div class="sec-h"><span class="t">最近项目</span><span class="n">3</span>
+      <div class="search"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><span>按名称过滤…</span></div>
+    </div>
+    <div class="pgrid">
+      <div class="pcard">
+        <div class="ph"><div class="pd" style="background:linear-gradient(135deg,#1D3A63,#123252);color:var(--accent)">胶环</div>
+          <div class="nm"><b>胶环密封检测</b><small>/Users/data/ring-seal</small></div>
+          <span class="tt" style="background:var(--accent-dim);color:var(--accent)">SEGMENT</span></div>
+        <div class="stats"><span><b>1,284</b><small>图片</small></span><span><b>41,876</b><small>标注数</small></span><span><b>0.947</b><small>最佳 mAP50</small></span></div>
+        <div class="pbar"><i style="width:53.5%;background:var(--ok)"></i><i style="width:18%;background:var(--warn)"></i></div>
+        <div class="pm"><span><i style="background:var(--ok)"></i>已确认 967</span><span><i style="background:var(--warn)"></i>待确认 231</span><span style="margin-left:auto">2 分钟前</span></div>
+      </div>
+      <div class="pcard">
+        <div class="ph"><div class="pd" style="background:linear-gradient(135deg,#3A2A12,#241A08);color:var(--warn)">VCM</div>
+          <div class="nm"><b>AST_VCM_CLS</b><small>E:/PROJECT/AST_VCM</small></div>
+          <span class="tt" style="background:rgba(245,184,61,.12);color:var(--warn)">OBB</span></div>
+        <div class="stats"><span><b>257</b><small>图片</small></span><span><b>612</b><small>标注数</small></span><span><b>0.931</b><small>最佳 mAP50</small></span></div>
+        <div class="pbar"><i style="width:71%;background:var(--ok)"></i><i style="width:12%;background:var(--warn)"></i></div>
+        <div class="pm"><span><i style="background:var(--ok)"></i>已确认 183</span><span><i style="background:var(--warn)"></i>待确认 30</span><span style="margin-left:auto">昨天</span></div>
+      </div>
+      <div class="pcard">
+        <div class="ph"><div class="pd" style="background:linear-gradient(135deg,#12332B,#0A1F19);color:var(--ok)">猫狗</div>
+          <div class="nm"><b>Demo-cs</b><small>/home/demo/demo-cs</small></div>
+          <span class="tt" style="background:rgba(62,207,142,.12);color:var(--ok)">CLASSIFY</span></div>
+        <div class="stats"><span><b>10,028</b><small>图片</small></span><span><b>—</b><small>标注数</small></span><span><b>0.923</b><small>top-1</small></span></div>
+        <div class="pbar"><i style="width:96%;background:var(--ok)"></i></div>
+        <div class="pm"><span><i style="background:var(--ok)"></i>已确认 9,640</span><span><i style="background:var(--warn)"></i>待确认 388</span><span style="margin-left:auto">3 天前</span></div>
+      </div>
+    </div>
+
+    <div class="sec-h"><span class="t">快速操作</span></div>
+    <div class="pgrid">
+      <div class="pcard" style="border-style:dashed;display:flex;align-items:center;justify-content:center;min-height:86px;color:var(--text-3)">＋ 新建项目</div>
+      <div class="pcard" style="border-style:dashed;display:flex;align-items:center;justify-content:center;min-height:86px;color:var(--text-3)">📂 打开本地项目</div>
+      <div class="pcard" style="border-style:dashed;display:flex;align-items:center;justify-content:center;min-height:86px;color:var(--text-3)">⤓ 导入外部标注</div>
+    </div>
+  </main>
+
+  <aside class="inspector">
+    <div class="insp-sec">
+      <div class="insp-h">快速开始</div>
+      <button class="bigbtn primary"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>新建项目</button>
+      <button class="bigbtn"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>打开项目</button>
+      <button class="bigbtn"><svg viewBox="0 0 24 24"><path d="M12 3v12M8 11l4 4 4-4M4 21h16"/></svg>导入标注</button>
+    </div>
+    <div class="insp-sec">
+      <div class="insp-h">快捷键</div>
+      <div class="hint">
+        <kbd>Ctrl+N</kbd> 新建项目<br><kbd>Ctrl+O</kbd> 打开项目<br>
+        <kbd>Ctrl+Shift+O</kbd> 添加图片目录<br><kbd>Ctrl+E</kbd> / <kbd>Ctrl+I</kbd> 导出 / 导入<br>
+        <kbd>⌘K</kbd> 全局命令搜索
+      </div>
+    </div>
+    <div class="insp-sec" style="border-bottom:none">
+      <div class="insp-h">工作流提示</div>
+      <div class="hint">新建项目时，所选目录即图片根目录；<b>一级子目录自动识别为数据版本</b>。标注以 sidecar JSON 与图片同目录存放。</div>
+    </div>
+  </aside>
+
+  <footer class="tasks">
+    <span>无进行中任务 — 打开项目后，训练与批量标注进度将常驻此处</span>
+    <div class="tstat"><span>AutoLabel Dock v0.1.0</span><span>Python 3.10 · PyQt5</span></div>
+  </footer>
+</div>
+</body>
+</html>

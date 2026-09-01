@@ -15,8 +15,14 @@ from src.ui.views.detect_pose import DetectPoseView
 from src.utils.image import ImageCache
 
 
+_APP = None
+
+
 def _app():
-    return QApplication.instance() or QApplication([])
+    global _APP
+    if _APP is None:
+        _APP = QApplication.instance() or QApplication([])
+    return _APP
 
 
 class _Config:

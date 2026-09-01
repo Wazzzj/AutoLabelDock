@@ -1,27 +1,32 @@
-"""Catppuccin Mocha color palette and auto-assignment."""
+"""Deep-sea blue theme class-color palette and auto-assignment.
 
-# 20 distinct colors from Catppuccin Mocha
+类别调色板：深海蓝玻璃主题配套的 20 色高饱和亮色系，在深蓝画布上
+对比度 ≥3:1，覆盖 blue/cyan/violet/green/amber/pink/red 等色相。
+变量名保留 CATPPUCCIN_PALETTE 以兼容旧引用，内容已替换为主题色系。
+"""
+
+# 20 distinct colors for the deep-sea blue glass theme
 CATPPUCCIN_PALETTE = [
-    "#a6e3a1",  # green
-    "#89b4fa",  # blue
-    "#f38ba8",  # red
-    "#fab387",  # peach
-    "#cba6f7",  # mauve
-    "#f9e2af",  # yellow
-    "#94e2d5",  # teal
-    "#f5c2e7",  # pink
-    "#89dceb",  # sky
-    "#eba0ac",  # maroon
-    "#74c7ec",  # sapphire
-    "#b4befe",  # lavender
-    "#a6adc8",  # subtext0
-    "#f2cdcd",  # flamingo
-    "#e6c384",  # gold (custom)
-    "#c6a0f6",  # violet (custom)
-    "#8caaee",  # blue2 (custom)
-    "#e78284",  # red2 (custom)
-    "#a5adce",  # overlay (custom)
-    "#81c8be",  # teal2 (custom)
+    "#60A5FA",  # blue
+    "#22D3EE",  # cyan
+    "#A78BFA",  # violet
+    "#34D399",  # green
+    "#FBBF24",  # amber
+    "#F472B6",  # pink
+    "#F87171",  # red
+    "#38BDF8",  # sky
+    "#A5B4FC",  # indigo
+    "#86EFAC",  # light-green
+    "#FDE68A",  # yellow
+    "#F0ABFC",  # fuchsia
+    "#2DD4BF",  # teal
+    "#FB923C",  # orange
+    "#E879F9",  # purple
+    "#7DD3FC",  # light-blue
+    "#C4B5FD",  # lavender
+    "#FCA5A5",  # light-red
+    "#5EEAD4",  # light-teal
+    "#FDBA74",  # light-orange
 ]
 
 

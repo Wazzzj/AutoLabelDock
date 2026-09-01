@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AutoLabel Dock — 三套 UI 方案预览</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Inter','Segoe UI','PingFang SC','Noto Sans CJK SC',system-ui,sans-serif;
+    background:#0d1117; color:#e6edf3; min-height:100vh; padding:24px; }
+  h1 { font-size:20px; font-weight:700; margin-bottom:6px; }
+  .sub { color:#8b949e; font-size:13px; margin-bottom:20px; }
+  .grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:16px; }
+  @media (max-width:1500px){ .grid { grid-template-columns:repeat(2, 1fr); } }
+  @media (max-width:1000px){ .grid { grid-template-columns:1fr; } }
+  .card { background:#161b22; border:1px solid #30363d; border-radius:12px; overflow:hidden;
+    display:flex; flex-direction:column; }
+  .card-head { padding:12px 16px; display:flex; align-items:center; gap:10px; }
+  .swatch { width:14px; height:14px; border-radius:4px; flex:none; }
+  .card-title { font-weight:700; font-size:14px; }
+  .card-tag { margin-left:auto; font-size:11px; color:#8b949e; background:#21262d;
+    padding:2px 8px; border-radius:20px; }
+  .card iframe { width:100%; height:560px; border:0; border-top:1px solid #30363d; background:#fff; }
+  .note { margin-top:16px; font-size:12px; color:#8b949e; line-height:1.7; }
+  .note code { background:#21262d; padding:1px 6px; border-radius:4px; font-size:11px; }
+</style>
+</head>
+<body>
+  <h1>AutoLabel Dock — UI 方案高保真原型</h1>
+  <div class="sub">浏览器直接打开本文件即可预览；原型模拟「标注页」主界面（数据版本树 + 文件列表 | 画布 + 标注 overlay | 标注列表/属性/统计），同一示例场景、仅主题不同。</div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-head">
+        <span class="swatch" style="background:linear-gradient(135deg,#5E6AD2,#2DD4BF)"></span>
+        <span class="card-title">方案 A · Pro Dark 数据看板</span>
+        <span class="card-tag">density 8 · 深色</span>
+      </div>
+      <iframe src="scheme_a_pro_dark.html"></iframe>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <span class="swatch" style="background:linear-gradient(135deg,#7C3AED,#06B6D4)"></span>
+        <span class="card-title">方案 B · Glass 玻璃拟态（紫夜）</span>
+        <span class="card-tag">variance 7</span>
+      </div>
+      <iframe src="scheme_b_glass.html"></iframe>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <span class="swatch" style="background:linear-gradient(135deg,#3B82F6,#22D3EE)"></span>
+        <span class="card-title">方案 B · Glass 玻璃拟态（深海蓝）</span>
+        <span class="card-tag">蓝调</span>
+      </div>
+      <iframe src="scheme_b_glass_blue.html"></iframe>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <span class="swatch" style="background:linear-gradient(135deg,#38BDF8,#7DD3FC)"></span>
+        <span class="card-title">方案 B · Glass 玻璃拟态（天空蓝）</span>
+        <span class="card-tag" style="background:#2b5aa0;color:#d6ecff">新增 · 更浅</span>
+      </div>
+      <iframe src="scheme_b_glass_sky.html"></iframe>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <span class="swatch" style="background:linear-gradient(135deg,#1E3A8A,#7C3AED)"></span>
+        <span class="card-title">方案 C · Bright Minimal 明亮极简</span>
+        <span class="card-tag">variance 3 · 浅色</span>
+      </div>
+      <iframe src="scheme_c_bright.html"></iframe>
+    </div>
+  </div>
+
+  <div class="note">
+    <b>说明</b>：这是高保真静态原型（HTML/CSS/SVG），用于直观对比三套设计语言的差异——<br>
+    · 方案 B 的毛玻璃效果用了 CSS <code>backdrop-filter</code>，PyQt5 QSS 无法原生实现，落地时以「半透明面板 + 渐变 + 高光边」模拟（详见 <code>UI_SCHEMES.md</code>）；<br>
+    · 画布中的示例图像与标注框（矩形框 / 实例分割多边形 / OBB 旋转框 / 未确认虚线 / 标签胶囊）为同一场景在三套主题下的渲染，展示类别色与状态色的对比度差异。<br>
+    · 若需程序真实截图，需先安装依赖（<code>pip install -r requirements.txt</code>）运行 <code>python main.py</code>。
+  </div>
+</body>
+</html>

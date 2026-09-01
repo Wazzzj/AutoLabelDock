@@ -197,6 +197,33 @@ _SVGS: dict[str, str] = {
         '<polyline points="3.27 6.96 12 12.01 20.73 6.96"/>'
         '<line x1="12" y1="22.08" x2="12" y2="12"/></svg>'
     ),
+    "search": (
+        '<svg viewBox="0 0 24 24" fill="none" stroke="{color}" stroke-width="2"'
+        ' stroke-linecap="round" stroke-linejoin="round">'
+        '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>'
+    ),
+    "label_page": (
+        '<svg viewBox="0 0 24 24" fill="none" stroke="{color}" stroke-width="2"'
+        ' stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0'
+        ' 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/>'
+        '<rect x="9" y="9" width="6" height="6" rx="1"/></svg>'
+    ),
+    "settings": (
+        '<svg viewBox="0 0 24 24" fill="none" stroke="{color}" stroke-width="2"'
+        ' stroke-linecap="round" stroke-linejoin="round">'
+        '<circle cx="12" cy="12" r="3"/>'
+        '<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83'
+        'l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1'
+        '-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0'
+        ' 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51'
+        '-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33'
+        '-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65'
+        ' 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65'
+        ' 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0'
+        ' 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0'
+        ' 0 0-1.51 1z"/></svg>'
+    ),
     "script_tab": (
         '<svg viewBox="0 0 24 24" fill="none" stroke="{color}" stroke-width="2"'
         ' stroke-linecap="round" stroke-linejoin="round">'
@@ -259,7 +286,7 @@ _icon_cache: dict[tuple[str, str, int], QIcon] = {}
 _app_icon_cache: QIcon | None = None
 
 
-def icon(name: str, color: str = "#d8dee9", size: int = 20) -> QIcon:
+def icon(name: str, color: str = "#A8C8E8", size: int = 20) -> QIcon:
     """Return a cached QIcon rendered from an inline SVG."""
     key = (name, color, size)
     if key in _icon_cache:

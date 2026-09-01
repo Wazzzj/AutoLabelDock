@@ -1,4 +1,4 @@
-﻿"""Annotation canvas widget for image display and annotation editing."""
+"""Annotation canvas widget for image display and annotation editing."""
 from __future__ import annotations
 
 import logging
@@ -95,6 +95,9 @@ class AnnotationCanvas(QWidget):
 
         # View transform
         self._scale: float = 1.0
+        self._show_class_labels = True
+        self._show_area_text = True
+        self._dim_confirmed = False
         self._offset_x: float = 0.0
         self._offset_y: float = 0.0
         self._view_initialized: bool = False
@@ -465,6 +468,20 @@ class AnnotationCanvas(QWidget):
         # Background
         painter.fillRect(self.rect(), QColor(PALETTE["canvas"]))
 
+        # 设计稿质感：画布区细点网格背景
+        grid_color = QColor(PALETTE["line"])
+        grid_color.setAlpha(60)
+        painter.setPen(QPen(grid_color))
+        step = 36
+        x = (self._offset_x % step + step) % step
+        while x < self.width():
+            painter.drawLine(int(x), 0, int(x), self.height())
+            x += step
+        y = (self._offset_y % step + step) % step
+        while y < self.height():
+            painter.drawLine(0, int(y), self.width(), int(y))
+            y += step
+
         if self._image is None:
             if self._loading:
                 self._paint_loading(painter)
@@ -498,23 +515,16 @@ class AnnotationCanvas(QWidget):
                 continue
             is_selected = ann.id == self._selected_id
             color = QColor(self._class_colors.get(ann.class_name, PALETTE["primary"]))
+            if self._dim_confirmed and ann.confirmed:
+                painter.setOpacity(0.45)
             self._paint_annotation(painter, ann, color, is_selected, draw_labels)
+            painter.setOpacity(1.0)
 
         # Draw in-progress bbox
         if self.tool_mode == "draw_polygon" and self._polygon_points:
             self._paint_polygon_preview(painter)
         elif self._drawing and self._draw_start and self._draw_current:
             self._paint_drawing_preview(painter)
-
-        # Zoom level indicator + lock badge
-        if self._image is not None:
-            font = QFont()
-            font.setPixelSize(11)
-            painter.setFont(font)
-            painter.setPen(QColor(PALETTE["text_subtle"]))
-            zoom_pct = int(self._scale * 100)
-            status_text = f"{zoom_pct}%"
-            painter.drawText(8, self.height() - 8, status_text)
 
         if self._loading:
             self._paint_loading(painter)
@@ -747,10 +757,13 @@ class AnnotationCanvas(QWidget):
     def _paint_label(
         self, painter: QPainter, x: float, y: float, ann: Annotation, color: QColor, in_conflict: bool
     ) -> None:
-        label_text = annotation_display_label(
-            ann,
-            (self._image_w, self._image_h),
-        )
+        if self._show_area_text:
+            label_text = annotation_display_label(
+                ann,
+                (self._image_w, self._image_h),
+            )
+        else:
+            label_text = ann.class_name
         if in_conflict:
             label_text += " \u21c4"
         elif not ann.confirmed:
@@ -1136,6 +1149,17 @@ class AnnotationCanvas(QWidget):
         self._offset_x += center_px - new_px
         self._offset_y += center_py - new_py
         self.zoom_changed.emit(self._scale)
+        self.update()
+
+    def set_label_toggles(self, show_labels: bool, show_area: bool) -> None:
+        """显示类别 / 显示面积 开关。"""
+        self._show_class_labels = show_labels
+        self._show_area_text = show_area
+        self.update()
+
+    def set_dim_confirmed(self, dim: bool) -> None:
+        """暗化已确认标注。"""
+        self._dim_confirmed = dim
         self.update()
 
     def zoom_in(self) -> None:

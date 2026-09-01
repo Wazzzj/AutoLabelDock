@@ -26,8 +26,8 @@ def test_obb_project_keeps_polygon_and_oriented_box_as_separate_tools(tmp_path):
 
     view.set_project(project)
 
-    assert view._btn_polygon.text() == "多边形"
-    assert view._btn_obb.text() == "旋转框"
+    assert view._btn_polygon.text() == "多边形  P"
+    assert view._btn_obb.text() == "旋转框  O"
     assert not view._btn_polygon.isHidden()
     assert not view._btn_obb.isHidden()
 
@@ -62,7 +62,8 @@ def test_obb_context_menu_survives_case_variant_task_and_canvas_clear(tmp_path):
     view.close()
 
 
-def test_segment_project_only_shows_polygon_tool(tmp_path):
+def test_segment_project_shows_polygon_and_obb_tools(tmp_path):
+    """设计稿：五个绘图工具对所有任务类型常显。"""
     project = ProjectManager.create(
         tmp_path / "segment-project",
         "segment-project",
@@ -73,7 +74,7 @@ def test_segment_project_only_shows_polygon_tool(tmp_path):
     view.set_project(project)
 
     assert not view._btn_polygon.isHidden()
-    assert view._btn_obb.isHidden()
+    assert not view._btn_obb.isHidden()
 
 
 def test_obb_context_menu_switches_to_drag_tool(tmp_path):

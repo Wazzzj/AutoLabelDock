@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>方案 B · 模型阶段 — AutoLabel Dock 重设计</title>
+<style>
+/* ============ 方案 B「训练流水线 Pipeline」 ============
+   结构主张：产品本质是闭环 → 把"数据→标注→训练→模型→导出"画成顶部流水线本体，
+   节点携带实时计数，节点间显式交接物；每个阶段是全屏工作区
+   调色板：石墨青灰底 · 信号橙 accent（工业 HMI 语汇） · 冷青辅助        */
+:root{
+  --bg:#0C1113;
+  --panel:#12191C;
+  --panel-2:#172125;
+  --line:#202B2F;
+  --line-strong:#2E3E44;
+  --text:#EAF1F2;
+  --text-2:#9DB3B8;
+  --text-3:#5F767C;
+  --accent:#FF8A3D;       /* 信号橙 */
+  --accent-soft:rgba(255,138,61,.12);
+  --teal:#2FBFA7;
+  --ok:#3ECF8E;
+  --warn:#F5C043;
+  --bad:#F16A5D;
+  --mono:"SF Mono",ui-monospace,Menlo,monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{background:var(--bg);color:var(--text);overflow:hidden;
+  font-family:-apple-system,"PingFang SC","Noto Sans SC","Microsoft YaHei",sans-serif;font-size:13px;
+  -webkit-font-smoothing:antialiased}
+.app{display:grid;grid-template-rows:160px 1fr;height:100vh}
+
+/* ============ 签名元素：顶部流水线本体 ============ */
+.header{background:linear-gradient(180deg,#101719 0%,var(--bg) 100%);border-bottom:1px solid var(--line);
+  padding:14px 22px 0;position:relative;z-index:20}
+.hd-row{display:flex;align-items:center;gap:14px;margin-bottom:8px}
+.brand{display:flex;align-items:center;gap:9px}
+.brand svg{display:block}
+.brand b{font-size:14px}
+.brand small{color:var(--text-3);font-size:11.5px}
+.hd-right{margin-left:auto;display:flex;gap:8px;align-items:center}
+.gpill{height:26px;display:flex;align-items:center;gap:6px;padding:0 10px;border:1px solid var(--line);
+  border-radius:13px;font-size:11.5px;color:var(--text-2);background:var(--panel)}
+.gpill .d{width:6px;height:6px;border-radius:50%;background:var(--ok);box-shadow:0 0 6px var(--ok)}
+
+/* 流水线 */
+.pipe{position:relative;height:98px}
+.pipe svg.wire{position:absolute;inset:0;width:100%;height:100%}
+.wire path{stroke:#26343A;stroke-width:2;fill:none}
+.wire path.flow{stroke:var(--accent);stroke-width:2;fill:none;stroke-dasharray:7 8;
+  animation:flow 1.1s linear infinite;opacity:.9}
+.wire path.flow.t{stroke:var(--teal)}
+@keyframes flow{to{stroke-dashoffset:-15}}
+.nodes{position:absolute;inset:0;display:flex;justify-content:space-between;align-items:flex-start;padding:0 40px}
+.node{display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;width:170px;position:relative;z-index:2}
+.node .bub{width:40px;height:40px;border-radius:50%;background:var(--panel-2);border:2px solid var(--line-strong);
+  display:flex;align-items:center;justify-content:center;color:var(--text-3);transition:all .18s;position:relative}
+.node .bub svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.node:hover .bub{border-color:var(--text-3);color:var(--text-2)}
+.node.on .bub{border-color:var(--accent);color:var(--accent);background:#1A1712;
+  box-shadow:0 0 0 4px var(--accent-soft),0 0 18px rgba(255,138,61,.25)}
+.node.done .bub{border-color:var(--teal);color:var(--teal)}
+.node .nm{font-size:12px;font-weight:600;color:var(--text-2)}
+.node.on .nm{color:var(--text)}
+.node .ct{font-size:10px;font-family:var(--mono);color:var(--text-3);white-space:nowrap}
+.node.on .ct{color:var(--accent)}
+.node .live{position:absolute;top:-3px;right:34px;font-size:9px;font-weight:700;color:#0C1113;background:var(--accent);
+  border-radius:7px;padding:1px 6px;letter-spacing:.04em}
+.node .live::after{content:"";display:inline-block;width:4px;height:4px;border-radius:50%;background:#0C1113;margin-left:3px;
+  animation:blink 1s steps(2) infinite}
+@keyframes blink{50%{opacity:.25}}
+/* 交接物标签（骑在连接线上，位于节点气泡之间的空档） */
+.handoff{position:absolute;top:11px;font-size:10px;color:var(--text-3);background:var(--panel);
+  border:1px solid var(--line);padding:2px 8px;border-radius:9px;font-family:var(--mono);z-index:1;white-space:nowrap}
+.handoff b{color:var(--teal)}
+
+/* ============ 阶段工作区 ============ */
+.stage{display:none;min-height:0;flex:1}
+.stage.on{display:grid}
+#st-label{grid-template-columns:74px 1fr;grid-template-rows:1fr}
+#st-train{grid-template-columns:264px 1fr 264px;grid-template-rows:1fr 148px}
+#st-models{grid-template-columns:1fr 316px}
+
+/* ---- 标注阶段：左缘胶片条 + 全宽画布 ---- */
+.filmstrip{background:var(--panel);border-right:1px solid var(--line);overflow-y:auto;padding:8px 8px}
+.fsth{font-size:9.5px;letter-spacing:.12em;color:var(--text-3);font-weight:700;margin:2px 0 8px 2px}
+.thumb{width:54px;height:54px;border-radius:8px;border:1.6px solid var(--line);margin:0 auto 7px;cursor:pointer;
+  position:relative;background:linear-gradient(135deg,#242E33,#181F23);overflow:hidden;transition:border-color .12s}
+.thumb:hover{border-color:var(--line-strong)}
+.thumb.sel{border-color:var(--accent)}
+.thumb svg{position:absolute;inset:0;width:100%;height:100%}
+.thumb .st{position:absolute;left:3px;bottom:3px;width:7px;height:7px;border-radius:50%}
+.thumb .st.ok{background:var(--ok)}.thumb .st.wn{background:var(--warn)}.thumb .st.ns{background:#3A474D}
+.canvaswrap{position:relative;background:radial-gradient(900px 560px at 55% 42%,#141B1E 0%,#0A0E10 75%);overflow:hidden}
+.cv-hud{position:absolute;top:12px;left:16px;display:flex;gap:8px}
+.hchip{background:rgba(18,25,28,.9);border:1px solid var(--line);border-radius:7px;padding:5px 10px;font-size:11.5px;color:var(--text-2)}
+.hchip b{color:var(--text);font-family:var(--mono);font-size:11px}
+.cv-tools{position:absolute;top:12px;right:16px;display:flex;gap:4px;background:rgba(18,25,28,.9);
+  border:1px solid var(--line);border-radius:9px;padding:3px}
+.cvt{width:30px;height:30px;border-radius:6px;display:flex;align-items:center;justify-content:center;color:var(--text-3);cursor:pointer}
+.cvt:hover{color:var(--text);background:var(--panel-2)}
+.cvt.on{color:var(--accent);background:var(--accent-soft)}
+.cvt svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+/* 交接卡：阶段右侧显式 CTA */
+.hand-card{position:absolute;right:16px;bottom:16px;width:236px;background:rgba(18,25,28,.94);
+  border:1px solid var(--line-strong);border-radius:12px;padding:13px 14px;backdrop-filter:blur(8px)}
+.hand-card .hc-h{font-size:10px;font-weight:700;letter-spacing:.14em;color:var(--text-3);margin-bottom:8px}
+.hand-card .hc-num{font-family:var(--mono);font-size:26px;font-weight:700;color:var(--teal);line-height:1}
+.hand-card .hc-num small{font-size:12px;color:var(--text-3);font-weight:400}
+.hand-card p{font-size:11.5px;color:var(--text-2);margin:7px 0 11px;line-height:1.5}
+.hcta{height:32px;border-radius:8px;border:none;background:var(--accent);color:#1A0E04;font-weight:700;font-size:12.5px;
+  width:100%;cursor:pointer;letter-spacing:.02em}
+.hcta:hover{filter:brightness(1.1)}
+.hsub{margin-top:7px;text-align:center;font-size:10.5px;color:var(--text-3)}
+
+/* ---- 训练阶段：参数抽屉 | 图表 | 队列 + 底部日志 ---- */
+.pane{background:var(--panel);overflow-y:auto}
+.pane.l{border-right:1px solid var(--line)}
+.pane.r{border-left:1px solid var(--line)}
+.pgrp{border-bottom:1px solid var(--line);padding:11px 14px}
+.pgrp .ph{display:flex;align-items:center;gap:7px;font-size:11px;font-weight:700;color:var(--text-2);
+  letter-spacing:.06em;cursor:pointer;margin-bottom:9px}
+.pgrp .ph svg{width:11px;height:11px;stroke:var(--text-3);fill:none;stroke-width:2.4}
+.prow{display:grid;grid-template-columns:64px 1fr;gap:8px;align-items:center;margin-bottom:7px;font-size:12px}
+.prow .k{color:var(--text-3)}
+.prow .v{background:var(--bg);border:1px solid var(--line);border-radius:6px;height:26px;display:flex;align-items:center;
+  padding:0 8px;font-family:var(--mono);font-size:11.5px;color:var(--text);justify-content:space-between}
+.prow .v em{font-style:normal;color:var(--text-3);font-size:10px}
+.chipset{display:flex;flex-wrap:wrap;gap:5px}
+.fchip{font-size:10.5px;padding:3px 9px;border-radius:12px;border:1px solid var(--line-strong);color:var(--text-2);cursor:pointer}
+.fchip.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+.dstart{margin:12px 14px;height:38px;border-radius:9px;border:none;background:var(--accent);color:#1A0E04;
+  font-weight:700;font-size:13px;cursor:pointer;width:calc(100% - 28px)}
+.dstart:hover{filter:brightness(1.1)}
+.tr-summary{display:grid;grid-template-rows:1fr 1fr;gap:10px;padding:12px 14px;min-height:0}
+.chart-card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 12px 6px;display:flex;flex-direction:column;min-height:0}
+.chart-card .ch{display:flex;align-items:baseline;gap:10px;margin-bottom:2px}
+.chart-card .ch b{font-size:12.5px}
+.chart-card .ch .big{margin-left:auto;font-family:var(--mono);font-size:17px;font-weight:700}
+.chart-card .ch .big.o{color:var(--accent)}.chart-card .ch .big.t{color:var(--teal)}
+.chart-card .ch small{color:var(--text-3);font-size:10.5px}
+.chart-card svg{flex:1;width:100%;min-height:0}
+.lg{display:flex;gap:12px;font-size:10px;color:var(--text-3);margin-top:2px}
+.lg i{display:inline-block;width:14px;height:2.5px;border-radius:2px;margin-right:4px;vertical-align:middle}
+.queue{padding:12px 14px}
+.qh{font-size:10px;font-weight:700;letter-spacing:.14em;color:var(--text-3);margin-bottom:10px}
+.qitem{border:1px solid var(--line);border-radius:10px;padding:10px 11px;margin-bottom:8px}
+.qitem.run{border-color:rgba(255,138,61,.5);background:linear-gradient(180deg,rgba(255,138,61,.07),transparent)}
+.qitem .qt{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:600}
+.qitem .qt .rd{width:7px;height:7px;border-radius:50%}
+.qitem.run .rd{background:var(--accent);box-shadow:0 0 8px var(--accent);animation:blink 1.2s steps(2) infinite}
+.qitem.wait .rd{background:var(--line-strong)}
+.qitem .qm{font-family:var(--mono);font-size:10.5px;color:var(--text-3);margin-top:5px}
+.qitem .qb{height:3.5px;border-radius:2px;background:var(--line);margin-top:7px;overflow:hidden}
+.qitem .qb i{display:block;height:100%;background:var(--accent)}
+.logpane{grid-column:1/-1;background:#0A0F11;border-top:1px solid var(--line);padding:10px 16px;overflow:hidden}
+.logpane .lt{font-size:10px;font-weight:700;letter-spacing:.14em;color:var(--text-3);margin-bottom:6px;display:flex;gap:10px;align-items:center}
+.logpane .lt .lv{color:var(--accent);font-family:var(--mono)}
+.log{font-family:var(--mono);font-size:10.8px;line-height:1.75;color:var(--text-2)}
+.log .e{color:var(--accent)}
+.log .g{color:var(--teal)}
+.log .d{color:var(--text-3)}
+
+/* ---- 模型阶段 ---- */
+.mgrid{padding:16px;overflow:auto}
+.mt-h{font-size:10px;font-weight:700;letter-spacing:.14em;color:var(--text-3);margin-bottom:12px}
+.mcards{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.mcard{border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:14px 16px;cursor:pointer}
+.mcard:hover{border-color:var(--line-strong)}
+.mcard.cur{border-color:var(--accent);background:linear-gradient(180deg,rgba(255,138,61,.06),var(--panel))}
+.mcard .mc-t{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.mcard .mc-t b{font-size:13.5px}
+.mcard .mc-t .ver{font-size:10px;font-family:var(--mono);color:var(--text-3);border:1px solid var(--line-strong);border-radius:5px;padding:1px 6px}
+.mcard .mc-t .use{margin-left:auto;font-size:10px;color:var(--ok)}
+.mmetrics{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.mm{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.mm .mv{font-family:var(--mono);font-size:16px;font-weight:700}
+.mm .mv.hot{color:var(--accent)}
+.mm .mk{font-size:10px;color:var(--text-3);margin-top:2px}
+.mm .mb{height:3px;border-radius:2px;background:var(--line);margin-top:6px;overflow:hidden}
+.mm .mb i{display:block;height:100%}
+.mside{background:var(--panel);border-left:1px solid var(--line);padding:16px;overflow-y:auto}
+.act-btn{height:34px;border-radius:9px;border:1px solid var(--line-strong);background:var(--panel-2);color:var(--text);
+  font-size:12.5px;width:100%;cursor:pointer;margin-bottom:8px;display:flex;align-items:center;justify-content:center;gap:8px}
+.act-btn:hover{border-color:var(--accent);color:var(--accent)}
+.act-btn.hot{background:var(--accent);border-color:var(--accent);color:#1A0E04;font-weight:700}
+.act-btn.hot:hover{filter:brightness(1.08);color:#1A0E04}
+.hist{margin-top:14px}
+.hrow{display:flex;align-items:center;gap:9px;padding:8px 2px;border-bottom:1px solid var(--line);font-size:11.5px;color:var(--text-2)}
+.hrow .hm{margin-left:auto;font-family:var(--mono);font-size:10.5px;color:var(--text)}
+.hrow .dt{font-family:var(--mono);font-size:10px;color:var(--text-3)}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ═══ 签名元素：流水线头部 ═══ -->
+  <header class="header">
+    <div class="hd-row">
+      <div class="brand">
+        <svg width="26" height="26" viewBox="0 0 26 26"><circle cx="13" cy="13" r="11" fill="none" stroke="#2E3E44" stroke-width="2"/><circle cx="13" cy="13" r="6.5" fill="none" stroke="#FF8A3D" stroke-width="2"/><circle cx="13" cy="13" r="2" fill="#FF8A3D"/></svg>
+        <div><b>胶环密封检测</b> <small>segment · 1,284 张 · sidecar</small></div>
+      </div>
+      <div class="hd-right">
+        <span class="gpill"><span class="d"></span>CUDA:0 · 8.2/12 GB</span>
+        <span class="gpill" style="color:var(--text)">⌘K 命令</span>
+      </div>
+    </div>
+
+    <div class="pipe">
+      <svg class="wire" viewBox="0 0 1400 98" preserveAspectRatio="none">
+        <!-- 数据 → 标注（常态灰） -->
+        <path d="M 163 20 C 240 20, 300 20, 374 20"/>
+        <!-- 标注 → 训练（流动 · 数据持续交接） -->
+        <path class="flow" d="M 451 20 C 520 20, 590 20, 662 20"/>
+        <!-- 训练 → 模型（流动 · 正在训练） -->
+        <path class="flow t" d="M 738 20 C 810 20, 880 20, 950 20"/>
+        <!-- 模型 → 导出（常态灰） -->
+        <path d="M 1026 20 C 1100 20, 1160 20, 1237 20"/>
+        <!-- 导出 → 数据 的闭环回线 -->
+        <path d="M 1275 46 C 1275 92, 125 92, 125 46" stroke-dasharray="3 6"/>
+      </svg>
+      <span class="handoff" style="left:478px"><b>967</b> 张已确认可训练</span>
+      <span class="handoff" style="left:772px;border-color:rgba(47,191,167,.4)">v4 训练中 <b>39%</b></span>
+
+      <div class="nodes">
+        <div class="node done" data-st="st-label">
+          <span class="bub"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg></span>
+          <span class="nm">数据</span><span class="ct">1,284 张 · 2 版本</span>
+        </div>
+        <div class="node done" data-st="st-label">
+          <span class="bub"><svg viewBox="0 0 24 24"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg></span>
+          <span class="nm">标注</span><span class="ct">967 ✓ · 231 待确认 · 86 空</span>
+        </div>
+        <div class="node on" data-st="st-train">
+          <span class="live">LIVE</span>
+          <span class="bub"><svg viewBox="0 0 24 24"><path d="M3 17l5-6 4 4 6-8 3 4"/><path d="M3 21h18"/></svg></span>
+          <span class="nm">训练</span><span class="ct">ring-seg-v4 · epoch 47/120</span>
+        </div>
+        <div class="node" data-st="st-models">
+          <span class="bub"><svg viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg></span>
+          <span class="nm">模型</span><span class="ct">4 个 · 最佳 mAP50 0.947</span>
+        </div>
+        <div class="node">
+          <span class="bub"><svg viewBox="0 0 24 24"><path d="M12 3v12M8 11l4 4 4-4M4 21h16"/></svg></span>
+          <span class="nm">导出部署</span><span class="ct">ONNX · v3 已导出</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- ═══ 阶段一：标注 ═══ -->
+  <section class="stage" id="st-label">
+    <aside class="filmstrip">
+      <div class="fsth">V1-产线A</div>
+      <div class="thumb"><svg viewBox="0 0 54 54"><circle cx="27" cy="27" r="17" fill="#3E4655"/><circle cx="27" cy="27" r="10" fill="#141821"/></svg><span class="st ok"></span></div>
+      <div class="thumb sel"><svg viewBox="0 0 54 54"><circle cx="24" cy="26" r="16" fill="#525B6B"/><circle cx="24" cy="26" r="9" fill="#141821"/><circle cx="42" cy="38" r="7" fill="#3E4655"/></svg><span class="st wn"></span></div>
+      <div class="thumb"><svg viewBox="0 0 54 54"><circle cx="27" cy="30" r="15" fill="#454D5C"/><circle cx="27" cy="30" r="8" fill="#141821"/></svg><span class="st ok"></span></div>
+      <div class="thumb"><svg viewBox="0 0 54 54"><circle cx="27" cy="24" r="16" fill="#3E4655"/><circle cx="27" cy="24" r="9" fill="#141821"/></svg><span class="st ns"></span></div>
+      <div class="thumb"><svg viewBox="0 0 54 54"><circle cx="22" cy="28" r="14" fill="#525B6B"/><circle cx="22" cy="28" r="8" fill="#141821"/><circle cx="40" cy="20" r="8" fill="#454D5C"/></svg><span class="st ok"></span></div>
+      <div class="thumb"><svg viewBox="0 0 54 54"><circle cx="27" cy="27" r="16" fill="#3E4655"/><circle cx="27" cy="27" r="9" fill="#141821"/></svg><span class="st ok"></span></div>
+      <div class="thumb"><svg viewBox="0 0 54 54"><circle cx="25" cy="25" r="15" fill="#454D5C"/><circle cx="25" cy="25" r="8" fill="#141821"/></svg><span class="st wn"></span></div>
+      <div class="fsth" style="margin-top:10px">V2-产线B</div>
+      <div class="thumb"><svg viewBox="0 0 54 54"><circle cx="27" cy="27" r="16" fill="#3E4655"/><circle cx="27" cy="27" r="9" fill="#141821"/></svg><span class="st ns"></span></div>
+      <div class="thumb"><svg viewBox="0 0 54 54"><circle cx="24" cy="28" r="15" fill="#525B6B"/><circle cx="24" cy="28" r="8" fill="#141821"/></svg><span class="st ok"></span></div>
+      <div class="thumb"><svg viewBox="0 0 54 54"><circle cx="28" cy="25" r="14" fill="#454D5C"/><circle cx="28" cy="25" r="8" fill="#141821"/></svg><span class="st ok"></span></div>
+    </aside>
+
+    <div class="canvaswrap">
+      <div class="cv-hud">
+        <span class="hchip">v1-产线A / <b>IMG_0437</b>.png · 1024²</span>
+        <span class="hchip">状态 <b style="color:var(--warn)">待确认</b></span>
+        <span class="hchip">预标注 <b>ring-seg-v3</b></span>
+      </div>
+      <div class="cv-tools">
+        <span class="cvt on"><svg viewBox="0 0 24 24"><path d="M4 4h7M4 4v7M20 20h-7M20 20v-7M4 4l6 6M20 20l-6-6"/></svg></span>
+        <span class="cvt"><svg viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="1"/></svg></span>
+        <span class="cvt"><svg viewBox="0 0 24 24"><path d="M12 3l8 5-3 9H7L4 8l8-5z"/></svg></span>
+        <span class="cvt"><svg viewBox="0 0 24 24"><rect x="7" y="4" width="10" height="16" rx="1" transform="rotate(25 12 12)"/></svg></span>
+        <span class="cvt"><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg></span>
+      </div>
+
+      <svg viewBox="0 0 1100 640" style="position:absolute;inset:0;width:100%;height:100%;padding:30px 90px">
+        <defs>
+          <radialGradient id="p2" cx="45%" cy="38%" r="85%">
+            <stop offset="0%" stop-color="#39424E"/><stop offset="55%" stop-color="#252C36"/><stop offset="100%" stop-color="#161B22"/>
+          </radialGradient>
+          <linearGradient id="m2" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#8B95A5"/><stop offset="45%" stop-color="#59636F"/><stop offset="100%" stop-color="#3C4450"/>
+          </linearGradient>
+        </defs>
+        <rect x="0" y="0" width="1100" height="640" rx="8" fill="url(#p2)"/>
+        <circle cx="530" cy="330" r="200" fill="url(#m2)"/>
+        <circle cx="530" cy="330" r="138" fill="#10141B"/>
+        <circle cx="530" cy="330" r="170" fill="none" stroke="#2A313D" stroke-width="20" opacity=".5"/>
+        <circle cx="855" cy="480" r="80" fill="#4A5260"/>
+        <circle cx="855" cy="480" r="42" fill="#10141B"/>
+        <path d="M660 195 l28 -15 4 28 -26 11 z" fill="#F16A5D" opacity=".85"/>
+        <text x="700" y="200" fill="#F8A099" font-size="12.5" font-family="SF Mono,monospace">scratch 0.31</text>
+        <polygon points="530,122 648,152 728,238 752,342 704,458 596,522 468,526 364,458 314,346 338,232 422,148"
+          fill="rgba(255,138,61,.06)" stroke="#FF8A3D" stroke-width="2.4"/>
+        <g fill="#0C1113" stroke="#FF8A3D" stroke-width="2">
+          <rect x="524" y="116" width="12" height="12"/><rect x="642" y="146" width="12" height="12"/>
+          <rect x="722" y="232" width="12" height="12"/><rect x="746" y="336" width="12" height="12"/>
+          <rect x="698" y="452" width="12" height="12"/><rect x="590" y="516" width="12" height="12"/>
+          <rect x="462" y="520" width="12" height="12"/><rect x="358" y="452" width="12" height="12"/>
+        </g>
+        <rect x="442" y="80" width="224" height="27" rx="7" fill="rgba(12,17,19,.92)" stroke="#FF8A3D"/>
+        <text x="468" y="99" fill="#FF8A3D" font-size="13.5" font-weight="700">item · 胶环</text>
+        <text x="560" y="99" fill="#9DB3B8" font-size="12" font-family="SF Mono,monospace">0.96 · 41,876px²</text>
+        <rect x="775" y="400" width="160" height="160" fill="none" stroke="#3ECF8E" stroke-width="2" opacity=".6"/>
+        <text x="776" y="440" fill="#3ECF8E" font-size="12" font-family="SF Mono,monospace" opacity=".8">✓ item 0.91</text>
+        <g stroke="#EAF1F2" stroke-width="1" opacity=".45">
+          <line x1="620" y1="0" x2="620" y2="640" stroke-dasharray="4 5"/><line x1="0" y1="300" x2="1100" y2="300" stroke-dasharray="4 5"/>
+        </g>
+      </svg>
+
+      <!-- 阶段交接卡 -->
+      <div class="hand-card">
+        <div class="hc-h">阶段交接 · 标注 → 训练</div>
+        <div class="hc-num">967 <small>/ 1,284 已确认</small></div>
+        <p>231 张待确认。确认后即可用当前筛选启动下一轮训练。</p>
+        <button class="hcta">用 967 张启动训练 →</button>
+        <div class="hsub">ring-seg-v4 正在训练 · 完成后自动注册</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ 阶段二：训练 ═══ -->
+  <section class="stage" id="st-train">
+    <aside class="pane l">
+      <div class="pgrp">
+        <div class="ph"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>基础配置</div>
+        <div class="prow"><span class="k">任务</span><span class="v">segment</span></div>
+        <div class="prow"><span class="k">基础模型</span><span class="v">yolo26m-seg<em>浏览</em></span></div>
+        <div class="prow"><span class="k">设备</span><span class="v">CUDA:0</span></div>
+      </div>
+      <div class="pgrp">
+        <div class="ph"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>训练参数</div>
+        <div class="prow"><span class="k">Epochs</span><span class="v">120</span></div>
+        <div class="prow"><span class="k">Batch</span><span class="v">4</span></div>
+        <div class="prow"><span class="k">ImgSz</span><span class="v">1024</span></div>
+        <div class="prow"><span class="k">Freeze</span><span class="v">10<em>阶段一</em></span></div>
+        <div class="prow"><span class="k">优化器</span><span class="v">AdamW</span></div>
+        <div class="prow"><span class="k">学习率</span><span class="v">0.001</span></div>
+        <div class="chipset">
+          <span class="fchip on">轻量几何增强</span><span class="fchip on">flip 0.5</span><span class="fchip">mosaic 关</span><span class="fchip">mixup 关</span>
+        </div>
+      </div>
+      <div class="pgrp">
+        <div class="ph"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>数据筛选</div>
+        <div class="chipset">
+          <span class="fchip on">v1-产线A</span><span class="fchip on">v2-产线B</span>
+          <span class="fchip on">仅已确认</span><span class="fchip">item</span><span class="fchip">Tag: 反光</span>
+        </div>
+        <div style="font-size:11px;color:var(--text-3);margin-top:9px;line-height:1.5">当前筛选命中 <b style="color:var(--teal);font-family:var(--mono)">967</b> 张 · 验证集 20% 分层抽样</div>
+      </div>
+      <button class="dstart">停止当前训练</button>
+    </aside>
+
+    <div style="display:flex;flex-direction:column;min-width:0;background:var(--bg)">
+      <div class="tr-summary">
+        <div class="chart-card">
+          <div class="ch"><b>Loss</b><small>train / val</small><span class="big o">0.214</span></div>
+          <svg viewBox="0 0 600 168" preserveAspectRatio="none">
+            <g stroke="#1C2629" stroke-width="1"><line x1="0" y1="42" x2="600" y2="42"/><line x1="0" y1="84" x2="600" y2="84"/><line x1="0" y1="126" x2="600" y2="126"/><line x1="75" y1="0" x2="75" y2="168"/><line x1="150" y1="0" x2="150" y2="168"/><line x1="225" y1="0" x2="225" y2="168"/><line x1="300" y1="0" x2="300" y2="168"/><line x1="375" y1="0" x2="375" y2="168"/><line x1="450" y1="0" x2="450" y2="168"/><line x1="525" y1="0" x2="525" y2="168"/></g>
+            <polyline points="0,20 25,48 50,66 75,78 100,86 150,97 200,105 250,111 300,117 350,122 400,126 432,129" fill="none" stroke="#FF8A3D" stroke-width="2"/>
+            <polyline points="0,30 25,56 50,74 75,86 100,95 150,106 200,114 250,120 300,126 350,131 400,136 432,139" fill="none" stroke="#2FBFA7" stroke-width="1.6" stroke-dasharray="5 4"/>
+            <circle cx="432" cy="129" r="3.4" fill="#FF8A3D"/>
+            <text x="440" y="126" fill="#5F767C" font-size="9.5" font-family="SF Mono,monospace">epoch 47</text>
+          </svg>
+          <div class="lg"><span><i style="background:#FF8A3D"></i>train 0.214</span><span><i style="background:#2FBFA7"></i>val 0.241</span><span style="margin-left:auto">patience 25 · 最佳 epoch 44</span></div>
+        </div>
+        <div class="chart-card">
+          <div class="ch"><b>mAP</b><small>val</small><span class="big t">0.938</span></div>
+          <svg viewBox="0 0 600 168" preserveAspectRatio="none">
+            <g stroke="#1C2629" stroke-width="1"><line x1="0" y1="42" x2="600" y2="42"/><line x1="0" y1="84" x2="600" y2="84"/><line x1="0" y1="126" x2="600" y2="126"/><line x1="75" y1="0" x2="75" y2="168"/><line x1="150" y1="0" x2="150" y2="168"/><line x1="225" y1="0" x2="225" y2="168"/><line x1="300" y1="0" x2="300" y2="168"/><line x1="375" y1="0" x2="375" y2="168"/><line x1="450" y1="0" x2="450" y2="168"/><line x1="525" y1="0" x2="525" y2="168"/></g>
+            <polyline points="0,160 25,140 50,118 75,100 100,88 150,70 200,58 250,48 300,40 350,34 400,29 432,27" fill="none" stroke="#2FBFA7" stroke-width="2"/>
+            <polyline points="0,164 25,152 50,136 75,120 100,108 150,92 200,80 250,71 300,63 350,57 400,52 432,49" fill="none" stroke="#FF8A3D" stroke-width="1.6" stroke-dasharray="5 4"/>
+            <circle cx="432" cy="27" r="3.4" fill="#2FBFA7"/>
+            <text x="440" y="26" fill="#5F767C" font-size="9.5" font-family="SF Mono,monospace">mAP50 0.938</text>
+          </svg>
+          <div class="lg"><span><i style="background:#2FBFA7"></i>mAP50 0.938</span><span><i style="background:#FF8A3D"></i>mAP50-95 0.859</span><span style="margin-left:auto">val 194 张</span></div>
+        </div>
+      </div>
+    </div>
+
+    <aside class="pane r">
+      <div class="queue">
+        <div class="qh">训练队列 · 串行</div>
+        <div class="qitem run">
+          <div class="qt"><span class="rd"></span>ring-seg-v4</div>
+          <div class="qm">epoch 47/120 · loss 0.214 · 2h 14m</div>
+          <div class="qb"><i style="width:39%"></i></div>
+        </div>
+        <div class="qitem wait">
+          <div class="qt"><span class="rd"></span>ring-seg-v5（检测）</div>
+          <div class="qm">yolo26m · 筛选: item · 967 张</div>
+          <div class="qb"><i style="width:0%"></i></div>
+        </div>
+        <div class="qitem wait">
+          <div class="qt"><span class="rd"></span>ring-obb-v2（旋转框）</div>
+          <div class="qm">yolo26s-obb · 筛选: v2-产线B</div>
+          <div class="qb"><i style="width:0%"></i></div>
+        </div>
+        <div style="font-size:10.5px;color:var(--text-3);margin-top:10px;line-height:1.6">队列完成后仅注册模型，不自动加载；单任务完成则自动加载 best.pt。</div>
+      </div>
+    </aside>
+
+    <div class="logpane">
+      <div class="lt">训练日志 · <span class="lv">ring-seg-v4</span><span style="margin-left:auto;font-family:var(--mono)">events.jsonl · 子进程</span></div>
+      <div class="log">
+        <span class="d">23:41:07</span> <span class="e">[epoch 47/120]</span> box_loss=<b>0.2143</b> seg_loss=<b>0.4871</b> mAP50=<span class="g">0.938</span> mAP50-95=<span class="g">0.859</span> lr=0.00084 · 38.2 it/s · GPU 8.2GB<br>
+        <span class="d">23:40:52</span> <span class="e">[epoch 46/120]</span> box_loss=0.2189 seg_loss=0.4932 mAP50=<span class="g">0.936</span> ✓ patience 3/25 · 保存 best.pt
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ 阶段三：模型 ═══ -->
+  <section class="stage on" id="st-models">
+    <div class="mgrid">
+      <div class="mt-h">模型注册表 · 指标来自验证集</div>
+      <div class="mcards">
+        <div class="mcard cur">
+          <div class="mc-t"><b>ring-seg-v3</b><span class="ver">v3</span><span class="use">● 已加载用于预标注</span></div>
+          <div class="mmetrics">
+            <div class="mm"><div class="mv hot">0.947</div><div class="mk">mAP50</div><div class="mb"><i style="width:94.7%;background:var(--accent)"></i></div></div>
+            <div class="mm"><div class="mv">0.871</div><div class="mk">mAP50-95</div><div class="mb"><i style="width:87.1%;background:var(--teal)"></i></div></div>
+            <div class="mm"><div class="mv">12.4<small style="font-size:10px">ms</small></div><div class="mk">推理 / 张</div><div class="mb"><i style="width:60%;background:#3A474D"></i></div></div>
+          </div>
+        </div>
+        <div class="mcard">
+          <div class="mc-t"><b>ring-seg-v2</b><span class="ver">v2</span></div>
+          <div class="mmetrics">
+            <div class="mm"><div class="mv">0.912</div><div class="mk">mAP50</div><div class="mb"><i style="width:91.2%;background:var(--accent)"></i></div></div>
+            <div class="mm"><div class="mv">0.826</div><div class="mk">mAP50-95</div><div class="mb"><i style="width:82.6%;background:var(--teal)"></i></div></div>
+            <div class="mm"><div class="mv">12.1<small style="font-size:10px">ms</small></div><div class="mk">推理 / 张</div><div class="mb"><i style="width:58%;background:#3A474D"></i></div></div>
+          </div>
+        </div>
+        <div class="mcard">
+          <div class="mc-t"><b>ring-seg-v1</b><span class="ver">v1</span></div>
+          <div class="mmetrics">
+            <div class="mm"><div class="mv">0.794</div><div class="mk">mAP50</div><div class="mb"><i style="width:79.4%;background:var(--warn)"></i></div></div>
+            <div class="mm"><div class="mv">0.688</div><div class="mk">mAP50-95</div><div class="mb"><i style="width:68.8%;background:var(--teal)"></i></div></div>
+            <div class="mm"><div class="mv">9.8<small style="font-size:10px">ms</small></div><div class="mk">推理 / 张</div><div class="mb"><i style="width:48%;background:#3A474D"></i></div></div>
+          </div>
+        </div>
+        <div class="mcard" style="border-style:dashed;display:flex;align-items:center;justify-content:center;min-height:110px;color:var(--text-3);font-size:12px">
+          ＋ 导入外部 .pt / .onnx 权重
+        </div>
+      </div>
+    </div>
+    <aside class="mside">
+      <div style="font-size:10px;font-weight:700;letter-spacing:.14em;color:var(--text-3);margin-bottom:12px">ring-seg-v3 · 操作</div>
+      <button class="act-btn hot">用于预标注</button>
+      <button class="act-btn">对目录批量推理</button>
+      <button class="act-btn">导出 PT</button>
+      <button class="act-btn">转换并导出 ONNX</button>
+      <button class="act-btn">重命名</button>
+      <div class="hist">
+        <div style="font-size:10px;font-weight:700;letter-spacing:.14em;color:var(--text-3);margin-bottom:6px">版本谱系</div>
+        <div class="hrow"><span class="dt">08-12</span>v1 · 640 张基线<span class="hm">0.794</span></div>
+        <div class="hrow"><span class="dt">08-19</span>v2 · +1,465 张 · 冻结 10<span class="hm">0.912</span></div>
+        <div class="hrow" style="color:var(--accent)"><span class="dt">08-26</span>v3 · 全模型低_lr 微调<span class="hm">0.947</span></div>
+        <div class="hrow" style="border-bottom:none;color:var(--text-3)"><span class="dt">运行中</span>v4 · 数据 +386 张<span class="hm">0.938↑</span></div>
+      </div>
+    </aside>
+  </section>
+</div>
+
+<script>
+// 流水线节点 → 阶段切换
+document.querySelectorAll('.node').forEach(n=>{
+  n.addEventListener('click',()=>{
+    const t=n.getAttribute('data-st');if(!t)return;
+    document.querySelectorAll('.node').forEach(x=>x.classList.remove('on'));
+    document.querySelectorAll('.node[data-st="'+t+'"]').forEach(x=>x.classList.add('on'));
+    document.querySelectorAll('.stage').forEach(x=>x.classList.remove('on'));
+    document.getElementById(t).classList.add('on');
+  });
+});
+document.querySelectorAll('.cvt').forEach(c=>c.addEventListener('click',()=>{
+  document.querySelectorAll('.cvt').forEach(x=>x.classList.remove('on'));c.classList.add('on');
+}));
+document.querySelectorAll('.thumb').forEach(c=>c.addEventListener('click',()=>{
+  document.querySelectorAll('.thumb').forEach(x=>x.classList.remove('sel'));c.classList.add('sel');
+}));
+</script>
+</body>
+</html>

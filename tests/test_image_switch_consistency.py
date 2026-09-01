@@ -13,8 +13,14 @@ from src.ui.canvas import AnnotationCanvas
 from src.ui.views.detect_pose import DetectPoseView
 
 
+_APP = None
+
+
 def _app():
-    return QApplication.instance() or QApplication([])
+    global _APP
+    if _APP is None:
+        _APP = QApplication.instance() or QApplication([])
+    return _APP
 
 
 _QT_APP = _app()

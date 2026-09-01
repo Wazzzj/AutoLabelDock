@@ -1,4 +1,4 @@
-﻿"""Main application window."""
+"""Main application window."""
 from __future__ import annotations
 
 import logging
@@ -8,14 +8,16 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from PyQt5.QtWidgets import (
     QApplication,
     QMainWindow,
-    QTabWidget,
+    QStackedWidget,
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
@@ -34,7 +36,9 @@ from PyQt5.QtWidgets import (
     QComboBox,
     QFileDialog,
 )
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QT_VERSION_STR
+from src.ui.shell import NavRail, TopBar, TaskChip
+from src.ui.home_view import HomeView
 
 from src.core.config import (
     AppConfig,
@@ -505,6 +509,9 @@ class MainWindow(QMainWindow):
     - TrainController: validate, start, stop, model registration
     """
 
+    # Background sidecar scan results (loop ring / badges / image count).
+    _shell_stats_ready = pyqtSignal(dict)
+
     def __init__(self, config_path: Path | str | None = None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("AutoLabel Dock")
@@ -550,29 +557,90 @@ class MainWindow(QMainWindow):
         self._training_queue: TrainingQueue[_TrainingJob] = TrainingQueue()
         self._training_batch_started_jobs = 0
 
-        # Central widget
-        self.tab_widget = QTabWidget()
-        self.setCentralWidget(self.tab_widget)
+        # Central widget — Scheme-A shell: left nav rail + top bar + page stack.
+        central = QWidget(self)
+        shell_layout = QHBoxLayout(central)
+        shell_layout.setContentsMargins(0, 0, 0, 0)
+        shell_layout.setSpacing(0)
 
-        # Welcome page
-        self._welcome = WelcomePage(self._app_config)
-        self._welcome.btn_new.clicked.connect(self._on_new_project)
-        self._welcome.btn_open.clicked.connect(self._on_open_project)
-        self._welcome.recent_list.itemDoubleClicked.connect(self._on_recent_clicked)
+        self._nav_rail = NavRail(central)
+        self._nav_rail.page_requested.connect(self._goto_page)
+        self._nav_rail.settings_requested.connect(
+            lambda: self._goto_page("home"))
+        shell_layout.addWidget(self._nav_rail)
+
+        right_column = QWidget(central)
+        right_layout = QVBoxLayout(right_column)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(0)
+
+        self._top_bar = TopBar(right_column)
+        right_layout.addWidget(self._top_bar)
+
+        self.page_stack = QStackedWidget()
+        right_layout.addWidget(self.page_stack, 1)
+        shell_layout.addWidget(right_column, 1)
+        self.setCentralWidget(central)
+
+        # Home page（Scheme-A：hero + 项目卡片 + 快速操作 + 检查器）
+        self._welcome = HomeView(self._app_config)
+        self._welcome.new_project_requested.connect(self._on_new_project)
+        self._welcome.open_project_requested.connect(self._on_open_project)
+        self._welcome.import_annotations_requested.connect(self._on_import)
+        self._welcome.open_project_path.connect(self._on_shell_recent_project)
         self._welcome.edit_project_requested.connect(self._on_edit_recent_project)
         self._welcome.remove_project_requested.connect(self._on_remove_recent_project)
-        self.tab_widget.addTab(self._welcome, icon("welcome"), "主页")
-        self._last_tab_widget = self._welcome
+        self._welcome.open_project_dir_requested.connect(self._on_shell_open_project_dir)
+        self.page_stack.addWidget(self._welcome)
+        self._pages: dict[str, QWidget] = {"home": self._welcome}
+        self._page_key_of: dict[int, str] = {}
+        self._current_page_key = "home"
+        self._nav_rail.set_current("home")
 
         self._setup_menus()
 
+        self._top_bar.set_version("v0.1.0")
+        # Status bar: persistent task chips (visible from every page) + info.
+        self._task_idle_label = QLabel(
+            "无进行中任务 — 打开项目后，训练与批量标注进度将常驻此处")
+        self._task_idle_label.setStyleSheet(
+            f"color:{PALETTE['text_subtle']};font-size:11px;")
+        self.statusBar().addWidget(self._task_idle_label)
+        self._train_task_chip = TaskChip("训练", "train_tab", PALETTE["primary"])
+        self._batch_task_chip = TaskChip("批量标注", "batch", PALETTE["warning"])
+        self._queue_chip = TaskChip("队列", "batch", PALETTE["text_subtle"])
+        self.statusBar().addWidget(self._train_task_chip)
+        self.statusBar().addWidget(self._batch_task_chip)
+        self.statusBar().addWidget(self._queue_chip)
         self._project_dir_label = QLabel()
         self.statusBar().addWidget(self._project_dir_label, 1)
         self._status_label = QLabel("就绪")
         self.statusBar().addPermanentWidget(self._status_label)
+        self._version_label = QLabel(
+            f"AutoLabel Dock v0.1.0 · Python {sys.version.split()[0]} · PyQt5 {QT_VERSION_STR}")
+        self._version_label.setStyleSheet(
+            f"color:{PALETTE['text_subtle']};font-size:10.5px;")
+        self.statusBar().addPermanentWidget(self._version_label)
+        # [诊断] 状态栏实时显示标注页右栏宽度，确认紧凑/加载
+        self._right_width_label = QLabel("右栏: ?")
+        self._right_width_label.setStyleSheet(
+            f"color:{PALETTE['warning']};font-size:10.5px;font-weight:700;")
+        self.statusBar().addPermanentWidget(self._right_width_label)
         self._set_project_dir_label(None)
+        self._device_probe_done = False
+        self._probe_device_async()
+        self._task_idle_timer = QTimer(self)
+        self._task_idle_timer.setInterval(800)
+        self._task_idle_timer.timeout.connect(self._refresh_task_idle)
+        self._task_idle_timer.start()
 
-        self.tab_widget.currentChanged.connect(self._on_tab_changed)
+        # Debounced background scan → loop ring / nav badge / image count.
+        self._shell_stats_timer = QTimer(self)
+        self._shell_stats_timer.setSingleShot(True)
+        self._shell_stats_timer.setInterval(500)
+        self._shell_stats_timer.timeout.connect(self._run_shell_stats_scan)
+        self._shell_stats_thread: threading.Thread | None = None
+        self._shell_stats_ready.connect(self._apply_shell_stats)
 
     @staticmethod
     def _startup_geometry(saved: dict[str, int]) -> dict[str, int]:
@@ -609,16 +677,33 @@ class MainWindow(QMainWindow):
             geo["y"] = available.top() + max(0, (available.height() - geo["height"]) // 2)
         return geo
 
-    def _on_tab_changed(self, index: int) -> None:
-        """Auto-refresh project-backed tabs when they become visible."""
-        current = self.tab_widget.widget(index)
-        previous = getattr(self, "_last_tab_widget", None)
+    def _goto_page(self, key: str) -> None:
+        """Switch the visible page via the nav rail (replaces tab switching)."""
+        widget = self._pages.get(key)
+        if widget is None:
+            # 未打开项目：给用户可见提示（按钮始终可点，不再静默）
+            self._status_label.setText(
+                "该页面需要先打开项目 — 请在主页新建项目，或点击最近项目卡片")
+            logger.info("Nav blocked (no project): key=%s", key)
+            return
+        if key == self._current_page_key:
+            return
+        logger.info("Nav: %s -> %s", self._current_page_key, key)
+        previous = self._pages.get(self._current_page_key)
+        # Leaving the training page: persist in-progress form edits.
         if (
             self._train_panel is not None
             and previous is self._train_panel
-            and current is not self._train_panel
+            and widget is not self._train_panel
         ):
             self._train_panel.save_last_train_settings_if_changed()
+        self._current_page_key = key
+        self._nav_rail.set_current(key)
+        self.page_stack.setCurrentWidget(widget)
+        self._on_page_entered(widget)
+
+    def _on_page_entered(self, current: QWidget) -> None:
+        """Auto-refresh project-backed pages when they become visible."""
         if self._label_panel is not None and current is self._label_panel:
             n = self._label_panel.rescan_images()
             if n > 0:
@@ -639,7 +724,6 @@ class MainWindow(QMainWindow):
                 # the training page and actually needs this information.
                 self._sync_train_available_classes()
                 self._refresh_train_filter_summary()
-        self._last_tab_widget = current
 
     def _sync_train_config_from_disk(self) -> None:
         """Reload persisted training settings when the training tab is opened."""
@@ -649,9 +733,176 @@ class MainWindow(QMainWindow):
         self._app_config.last_train_config = disk_config.last_train_config
         self._train_panel.apply_last_train_settings(self._app_config.last_train_config)
 
+    # ── Scheme-A shell: pages, stats, persistent tasks ──
+
+    def _register_page(self, key: str, widget: QWidget) -> None:
+        """Lazily register a project page into the shell stack + nav rail."""
+        if key in self._pages:
+            return
+        self._pages[key] = widget
+        self.page_stack.addWidget(widget)
+
+    def _on_shell_recent_project(self, path: str) -> None:
+        """Open a project chosen from the top-bar project switcher."""
+        try:
+            pm = ProjectManager.open(path)
+        except (FileNotFoundError, json.JSONDecodeError, KeyError, OSError) as e:
+            logger.warning("Failed to open recent project %s: %s", path, e)
+            QMessageBox.warning(self, "打开项目失败", f"无法打开项目：\n{path}\n\n{e}")
+            return
+        self.open_project(pm)
+
+    def _toggle_label_file_list(self) -> None:
+        """检查器“数据版本 → 管理”→ 呼出文件列表抽屉。"""
+        if self._label_panel is not None:
+            self._label_panel._toggle_file_list()
+
+    def _on_shell_open_project_dir(self, path: str) -> None:
+        """主页卡片右键 → 在文件管理器中打开项目目录。"""
+        target = Path(path)
+        if not target.exists():
+            QMessageBox.warning(self, "打开资源目录", f"目录不存在：\n{path}")
+            return
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", str(target)])
+        elif os.name == "nt":
+            os.startfile(str(target))  # noqa: S606
+        else:
+            subprocess.Popen(["xdg-open", str(target)])
+
+    def _refresh_task_idle(self) -> None:
+        # [诊断] 刷新右栏宽度显示
+        if self._label_panel is not None:
+            v = getattr(self._label_panel, "_view", None)
+            w = getattr(getattr(v, "_ann_panel", None), "width", None)
+            if callable(w):
+                self._right_width_label.setText(f"右栏: {w()}px")
+
+        """无任何常驻任务时，任务条左侧显示占位说明。"""
+        busy = (
+            not self._train_task_chip.isHidden()
+            or not self._batch_task_chip.isHidden()
+            or not self._queue_chip.isHidden()
+        )
+        self._task_idle_label.setVisible(not busy)
+
+    def _schedule_shell_stats_refresh(self) -> None:
+        """Debounce heavy per-image stats scans (loop ring / badges)."""
+        if self._project is None:
+            return
+        self._shell_stats_timer.start()
+
+    def _run_shell_stats_scan(self) -> None:
+        """Kick the debounced scan inside a daemon thread (UI stays fluid)."""
+        if self._project is None:
+            return
+        if self._shell_stats_thread is not None and self._shell_stats_thread.is_alive():
+            # A scan is in flight; re-schedule so the newest edit still lands.
+            self._shell_stats_timer.start()
+            return
+        project = self._project
+        self._shell_stats_thread = threading.Thread(
+            target=self._scan_project_stats,
+            args=(project,),
+            daemon=True,
+        )
+        self._shell_stats_thread.start()
+
+    def _scan_project_stats(self, project: ProjectManager) -> None:
+        """Walk sidecar annotations off the UI thread and publish counts."""
+        total = confirmed = pending = 0
+        try:
+            for img_path in project.list_images():
+                ia = load_annotation(project.label_path_for(img_path))
+                if ia is None:
+                    continue
+                total += 1
+                status = getattr(ia, "status", "unlabeled")
+                if status == "confirmed":
+                    confirmed += 1
+                elif status == "pending":
+                    pending += 1
+        except (OSError, ValueError) as exc:
+            logger.debug("Shell stats scan failed: %s", exc)
+            return
+        self._shell_stats_ready.emit({
+            "total": total,
+            "confirmed": confirmed,
+            "pending": pending,
+        })
+
+    def _apply_shell_stats(self, stats: dict) -> None:
+        """Loop ring + 标注徽标（UI 线程）。"""
+        if "device" in stats:
+            text, active = stats["device"]
+            self._top_bar.set_device(str(text), bool(active))
+            return
+        total = int(stats.get("total", 0))
+        confirmed = int(stats.get("confirmed", 0))
+        pending = int(stats.get("pending", 0))
+        self._nav_rail.loop_ring().set_stats(confirmed, pending, total)
+        if pending > 0:
+            self._nav_rail.set_badge("label", str(pending), "red")
+        else:
+            self._nav_rail.set_badge("label", None)
+
+    def _probe_device_async(self) -> None:
+        """启动即探测设备 → 顶栏设备徽标（绿灯=可用，灰灯=无显卡）。
+
+        - macOS：读取 Apple 芯片名（如 Apple M2 Pro），绿灯；
+        - Windows/Linux：nvidia-smi 检测到 NVIDIA → 显示 CUDA + 显卡名，绿灯；
+        - 检测不到 → 显示"无显卡"，绿灯不亮。
+        """
+        if self._device_probe_done:
+            return
+        self._device_probe_done = True
+
+        def _probe() -> None:
+            text, active = "无显卡", False
+            if sys.platform == "darwin":
+                try:
+                    chip = subprocess.check_output(
+                        ["sysctl", "-n", "machdep.cpu.brand_string"],
+                        text=True, timeout=5,
+                    ).strip()
+                    if chip:
+                        text, active = chip, True
+                except (OSError, subprocess.SubprocessError):
+                    pass
+            else:
+                cmd = ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"]
+                kwargs = {}
+                if os.name == "nt":
+                    kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                try:
+                    out = subprocess.check_output(
+                        cmd, text=True, timeout=5, **kwargs
+                    ).strip().splitlines()
+                    if out and out[0].strip():
+                        text, active = f"CUDA · {out[0].strip()}", True
+                except (OSError, subprocess.SubprocessError):
+                    pass
+            try:
+                self._shell_stats_ready.emit({"device": (text, active)})
+            except RuntimeError:
+                pass  # 窗口已销毁（退出竞态）
+
+        threading.Thread(target=_probe, daemon=True).start()
+
+    def _on_shell_train_epoch(self, metrics: dict) -> None:
+        """Mirror training progress into the persistent task chip."""
+        epoch = int(metrics.get("epoch", 0) or 0)
+        active = self._training_queue.active
+        total = active.config.epochs if active is not None else 0
+        if total:
+            self._train_task_chip.update_progress(epoch, total, "epochs")
+        else:
+            self._train_task_chip.set_text(f"epoch {epoch}")
+
+
     def _setup_menus(self) -> None:
         mb = self.menuBar()
-        mb.setNativeMenuBar(False)
+        mb.setNativeMenuBar(sys.platform == "darwin")
         mb.setVisible(True)
 
         file_menu = mb.addMenu("文件")
@@ -734,117 +985,144 @@ class MainWindow(QMainWindow):
         self._project_ctrl._project = project_manager
         self.setWindowTitle(f"AutoLabel Dock — {project_manager.config.name}")
         self._set_project_dir_label(project_manager.project_dir)
-        self._maybe_apply_detected_project_data(project_manager)
-        # Also covers projects passed directly after task-type edits, bypassing
-        # ProjectController.open_project(). Existing internal labels are skipped.
-        self._project_ctrl.import_discovered_obb_sidecars(project_manager)
-        self._add_detected_annotation_classes(project_manager)
-        self._welcome.refresh_recent_projects()
-
-        self._model_registry = ModelRegistry(project_manager.project_dir / "models")
-        self._model_registry.load()
-        self._model_ctrl.set_context(project_manager, self._model_registry)
-
-        if self._label_panel is None:
-            self._label_panel = LabelPanel(
-                config_path=self._config_path,
-                tag_controller=self._tag_ctrl,
-            )
-            self._label_panel.auto_label_single_requested.connect(self._on_auto_label_single)
-            self._label_panel.auto_label_batch_requested.connect(self._on_auto_label_batch)
-            self._label_panel.status_changed.connect(self._status_label.setText)
-            self._label_panel.user_tags_changed.connect(self._on_label_user_tags_changed)
-            self._label_panel.annotations_changed.connect(self._on_label_annotations_changed)
-            self._label_panel.la_enable_requested.connect(self._on_la_enable_requested)
-            self._label_panel.la_disable_requested.connect(self._la_ctrl.disable)
-            self._label_panel.la_query_changed.connect(self._la_ctrl.set_query)
-            # Experimental master switch: fully hide the LA bar when disabled.
-            self._label_panel.set_la_feature_visible(
-                self._app_config.enable_locateanything
-            )
-            self._label_panel.set_annotation_panel_state({
-                "sizes": list(self._app_config.annotation_panel_splitter_sizes),
-                "collapsed": dict(self._app_config.annotation_panel_collapsed),
-            })
-            self.tab_widget.addTab(self._label_panel, icon("label_tab"), "标注")
-        if self._preview_panel is None:
-            self._preview_panel = PreviewPanel()
-            self._preview_panel.status_changed.connect(self._status_label.setText)
-            self._preview_panel.edit_requested.connect(self._on_preview_edit_requested)
-            self.tab_widget.addTab(self._preview_panel, icon("eye"), "预览")
-        self._tag_ctrl.set_project(project_manager, self._project_ctrl.backup_manager)
-        # Switching projects: unload any active LA runtime and reset the bar so
-        # the new project starts from the collapsed (not-enabled) state.
-        if self._la_ctrl.is_active:
-            self._la_ctrl.disable()
-        self._label_panel.set_la_enabled_state(False)
-        self._label_panel.set_project(project_manager)
-        self._preview_panel.set_project(project_manager)
-
-        if self._train_panel is None:
-            self._train_panel = TrainPanel(
-                app_config=self._app_config,
-                config_path=self._config_path,
-            )
-            self._train_panel._btn_start.clicked.connect(self._on_start_training)
-            self._train_panel.stop_requested.connect(self._on_stop_training)
-            self._train_panel.clear_queue_requested.connect(self._on_clear_training_queue)
-            self._train_panel.preview_augmentation_requested.connect(self._on_preview_augmentation)
-            self._train_panel.filter_changed.connect(self._on_train_tag_filter_changed)
-            self._train_panel.set_template_registry(self._template_registry)
-            self.tab_widget.addTab(self._train_panel, icon("train_tab"), "训练")
-        # Push current tag registry into both label panel + train panel.
-        self._sync_available_tags()
-        # Re-sync when the registry mutates.
         try:
-            self._tag_ctrl.tags_changed.disconnect(self._sync_available_tags)
-        except TypeError:
-            pass
-        self._tag_ctrl.tags_changed.connect(self._sync_available_tags)
+            self._maybe_apply_detected_project_data(project_manager)
+            # Also covers projects passed directly after task-type edits, bypassing
+            # ProjectController.open_project(). Existing internal labels are skipped.
+            self._project_ctrl.import_discovered_obb_sidecars(project_manager)
+            self._add_detected_annotation_classes(project_manager)
+            self._welcome.refresh_recent_projects()
 
-        if self._model_panel is None:
-            self._model_panel = ModelPanel()
-            model_panel_config = self._app_config.model_panel_config or {
-                "conf_threshold": self._app_config.default_conf_threshold,
-                "iou_threshold": self._app_config.default_iou_threshold,
-                "overlap_iou_threshold": self._app_config.overlap_iou_threshold,
-            }
-            self._model_panel.apply_panel_settings(model_panel_config)
-            self._model_panel.model_load_requested.connect(self._on_model_load)
-            self._model_panel.model_delete_requested.connect(self._on_model_delete)
-            self._model_panel.model_rename_requested.connect(self._on_model_rename)
-            self._model_panel.model_import_requested.connect(self._on_model_import)
-            self._model_panel.model_predict_requested.connect(self._on_model_predict_image)
-            self._model_panel.model_export_pt_requested.connect(self._on_model_export_pt)
-            self._model_panel.model_export_onnx_requested.connect(self._on_model_export_onnx)
-            self.tab_widget.addTab(self._model_panel, icon("model_tab"), "模型")
+            self._model_registry = ModelRegistry(project_manager.project_dir / "models")
+            self._model_registry.load()
+            self._model_ctrl.set_context(project_manager, self._model_registry)
 
-        if self._tools_panel is None:
-            self._tools_panel = ScriptToolPanel(
-                app_config=self._app_config,
-                config_path=self._config_path,
+            if self._label_panel is None:
+                self._label_panel = LabelPanel(
+                    config_path=self._config_path,
+                    tag_controller=self._tag_ctrl,
+                )
+                self._label_panel.auto_label_single_requested.connect(self._on_auto_label_single)
+                self._label_panel.auto_label_batch_requested.connect(self._on_auto_label_batch)
+                self._label_panel.status_changed.connect(self._status_label.setText)
+                self._label_panel.user_tags_changed.connect(self._on_label_user_tags_changed)
+                self._label_panel.annotations_changed.connect(self._on_label_annotations_changed)
+                self._label_panel.la_enable_requested.connect(self._on_la_enable_requested)
+                self._label_panel.la_disable_requested.connect(self._la_ctrl.disable)
+                self._label_panel.la_query_changed.connect(self._la_ctrl.set_query)
+                self._label_panel.open_preview_requested.connect(
+                    lambda: self._goto_page("preview"))
+                self._label_panel.manage_data_folders_requested.connect(
+                    self._toggle_label_file_list)
+                self._label_panel.tag_manage_requested.connect(
+                    self._on_tag_manager)
+                # Experimental master switch: fully hide the LA bar when disabled.
+                self._label_panel.set_la_feature_visible(
+                    self._app_config.enable_locateanything
+                )
+                self._label_panel.set_annotation_panel_state({
+                    "sizes": list(self._app_config.annotation_panel_splitter_sizes),
+                    "collapsed": dict(self._app_config.annotation_panel_collapsed),
+                })
+                self._register_page("label", self._label_panel)
+            if self._preview_panel is None:
+                self._preview_panel = PreviewPanel()
+                self._preview_panel.status_changed.connect(self._status_label.setText)
+                self._preview_panel.edit_requested.connect(self._on_preview_edit_requested)
+                self._register_page("preview", self._preview_panel)
+            self._tag_ctrl.set_project(project_manager, self._project_ctrl.backup_manager)
+            # Switching projects: unload any active LA runtime and reset the bar so
+            # the new project starts from the collapsed (not-enabled) state.
+            if self._la_ctrl.is_active:
+                self._la_ctrl.disable()
+            self._label_panel.set_la_enabled_state(False)
+            self._label_panel.set_project(project_manager)
+            self._preview_panel.set_project(project_manager)
+
+            if self._train_panel is None:
+                self._train_panel = TrainPanel(
+                    app_config=self._app_config,
+                    config_path=self._config_path,
+                )
+                self._train_panel._btn_start.clicked.connect(self._on_start_training)
+                self._train_panel.stop_requested.connect(self._on_stop_training)
+                self._train_panel.clear_queue_requested.connect(self._on_clear_training_queue)
+                self._train_panel.preview_augmentation_requested.connect(self._on_preview_augmentation)
+                self._train_panel.filter_changed.connect(self._on_train_tag_filter_changed)
+                self._train_panel.set_template_registry(self._template_registry)
+                self._register_page("train", self._train_panel)
+            # Push current tag registry into both label panel + train panel.
+            self._sync_available_tags()
+            # Re-sync when the registry mutates.
+            try:
+                self._tag_ctrl.tags_changed.disconnect(self._sync_available_tags)
+            except TypeError:
+                pass
+            self._tag_ctrl.tags_changed.connect(self._sync_available_tags)
+
+            if self._model_panel is None:
+                self._model_panel = ModelPanel()
+                model_panel_config = self._app_config.model_panel_config or {
+                    "conf_threshold": self._app_config.default_conf_threshold,
+                    "iou_threshold": self._app_config.default_iou_threshold,
+                    "overlap_iou_threshold": self._app_config.overlap_iou_threshold,
+                }
+                self._model_panel.apply_panel_settings(model_panel_config)
+                self._model_panel.model_load_requested.connect(self._on_model_load)
+                self._model_panel.model_delete_requested.connect(self._on_model_delete)
+                self._model_panel.model_rename_requested.connect(self._on_model_rename)
+                self._model_panel.model_import_requested.connect(self._on_model_import)
+                self._model_panel.model_predict_requested.connect(self._on_model_predict_image)
+                self._model_panel.model_export_pt_requested.connect(self._on_model_export_pt)
+                self._model_panel.model_export_onnx_requested.connect(self._on_model_export_onnx)
+                self._register_page("models", self._model_panel)
+
+            if self._tools_panel is None:
+                self._tools_panel = ScriptToolPanel(
+                    app_config=self._app_config,
+                    config_path=self._config_path,
+                )
+                self._tools_panel.status_changed.connect(self._status_label.setText)
+                self._register_page("tools", self._tools_panel)
+
+            self._train_panel._task_combo.setCurrentText(project_manager.config.task_type)
+            self._model_panel.set_project_dir(project_manager.project_dir)
+            self._model_panel.set_models(self._model_registry.list_models())
+            self._model_panel.set_prediction_class_colors({
+                cls: project_manager.config.get_class_color(cls)
+                for cls in project_manager.config.classes
+            })
+            self._train_panel.set_registered_models(self._model_registry.list_models())
+            self._train_panel.set_available_data_folders(
+                project_manager.list_data_folders(),
+                default_folder=project_manager.config.active_data_folder,
+                preserve_selection=False,
             )
-            self._tools_panel.status_changed.connect(self._status_label.setText)
-            self.tab_widget.addTab(self._tools_panel, icon("script_tab"), "小工具")
+            self._sync_train_available_classes()
+            self._refresh_train_filter_summary()
+            self._tools_panel.set_working_directory(project_manager.project_dir)
+        except Exception:
+            # 导航栏始终可用：初始化半途失败也保证能切换页面，并明确告知
+            logger.exception("打开项目时部分初始化失败")
+            QMessageBox.warning(
+                self, "打开项目提示",
+                "项目已打开，但部分面板初始化失败，相关功能可能不可用。\n"
+                "详情见 logs/autolabel.log。")
+        finally:
+            self._goto_page("label")
+            self._nav_rail.set_enabled_pages(list(self._pages.keys()))
+            self._schedule_shell_stats_refresh()
+            self._probe_device_async()
+            self._status_label.setText(
+                f"项目: {project_manager.config.name} | "
+                f"图片: {len(project_manager.list_images())} | "
+                f"类别: {len(project_manager.config.classes)}"
+            )
 
-        self._train_panel._task_combo.setCurrentText(project_manager.config.task_type)
-        self._model_panel.set_project_dir(project_manager.project_dir)
-        self._model_panel.set_models(self._model_registry.list_models())
-        self._model_panel.set_prediction_class_colors({
-            cls: project_manager.config.get_class_color(cls)
-            for cls in project_manager.config.classes
-        })
-        self._train_panel.set_registered_models(self._model_registry.list_models())
-        self._train_panel.set_available_data_folders(
-            project_manager.list_data_folders(),
-            default_folder=project_manager.config.active_data_folder,
-            preserve_selection=False,
-        )
-        self._sync_train_available_classes()
-        self._refresh_train_filter_summary()
-        self._tools_panel.set_working_directory(project_manager.project_dir)
-
-        self.tab_widget.setCurrentWidget(self._label_panel)
+        self._goto_page("label")
+        self._nav_rail.set_enabled_pages(list(self._pages.keys()))
+        self._schedule_shell_stats_refresh()
+        self._probe_device_async()
         self._status_label.setText(
             f"项目: {project_manager.config.name} | "
             f"图片: {len(project_manager.list_images())} | "
@@ -930,7 +1208,7 @@ class MainWindow(QMainWindow):
     def _on_preview_edit_requested(self, path) -> None:
         if self._label_panel is None:
             return
-        self.tab_widget.setCurrentWidget(self._label_panel)
+        self._goto_page("label")
         focused = self._label_panel.focus_image(Path(path))
         if focused:
             self._status_label.setText(f"正在编辑: {Path(path).name}")
@@ -1205,6 +1483,8 @@ class MainWindow(QMainWindow):
         files. They are refreshed when the training tab becomes visible, so a
         box confirmation/deletion remains a current-image operation here.
         """
+        # Scheme-A shell: 闭环进度环 / 待确认徽标（后台防抖扫描）
+        self._schedule_shell_stats_refresh()
 
     def _on_label_user_tags_changed(self, path, tags) -> None:
         """Per-image tag edits — the view already saved the JSON; we only
@@ -1786,9 +2066,11 @@ class MainWindow(QMainWindow):
         self._batch_dialog.cancelled.connect(self._batch_worker.cancel)
         self._batch_dialog.show()
         self._status_label.setText(f"批量标注进行中: 0/{len(target_images)}")
+        self._batch_task_chip.start("批量标注")
 
     def _on_batch_progress(self, current: int, total: int) -> None:
         self._status_label.setText(f"批量标注进行中: {current}/{total}")
+        self._batch_task_chip.update_progress(current, total)
         if self._batch_dialog:
             self._batch_dialog.update_progress(current, total)
 
@@ -1841,6 +2123,7 @@ class MainWindow(QMainWindow):
             self._label_panel._view._file_list.set_status(img_path, ia.status)
 
     def _on_batch_finished(self) -> None:
+        self._schedule_shell_stats_refresh()
         skipped = getattr(self, "_batch_skipped", 0)
         failed = getattr(self, "_batch_failed", 0)
         roi_filtered = getattr(self, "_batch_roi_filtered", 0)
@@ -1855,6 +2138,7 @@ class MainWindow(QMainWindow):
             self._status_label.setText("批量自动标注完成（" + "，".join(notes) + "）")
         else:
             self._status_label.setText("批量自动标注完成")
+        self._batch_task_chip.finish("完成")
         if self._batch_dialog:
             self._batch_dialog.close()
             self._batch_dialog = None
@@ -1862,6 +2146,7 @@ class MainWindow(QMainWindow):
             self._label_panel._view.reload_current()
 
     def _on_batch_error(self, msg: str) -> None:
+        self._batch_task_chip.finish("失败")
         self._status_label.setText("批量标注失败")
         if self._batch_dialog:
             self._batch_dialog.close()
@@ -2077,9 +2362,15 @@ class MainWindow(QMainWindow):
             )
             if self._train_panel:
                 worker.epoch_update.connect(self._train_panel.update_epoch)
+            worker.epoch_update.connect(self._on_shell_train_epoch)
             worker.finished_ok.connect(self._on_training_finished)
             worker.cancelled.connect(self._on_training_cancelled)
             worker.error.connect(self._on_training_error)
+            active = self._training_queue.active
+            self._train_task_chip.start(
+                f"训练 {active.display_name}" if active else "训练")
+            self._train_task_chip.set_text("启动中…")
+            self._nav_rail.loop_ring().set_training(True)
         except (OSError, ValueError, RuntimeError) as exc:
             logger.error("Failed to start queued training: %s", exc, exc_info=True)
             self._on_training_error(str(exc))
@@ -2088,10 +2379,21 @@ class MainWindow(QMainWindow):
         if self._train_panel is None:
             return
         active = self._training_queue.active
+        waiting = list(self._training_queue.waiting)
         self._train_panel.set_training_queue(
             active.display_name if active else None,
-            [job.display_name for job in self._training_queue.waiting],
+            [job.display_name for job in waiting],
         )
+        # 壳层：训练徽标 + 队列任务条
+        if active is not None:
+            self._nav_rail.set_badge(
+                "train", str(1 + len(waiting)), "blue")
+            self._queue_chip.set_text(
+                f"排队 {len(waiting)}"
+                + (f" · 下一个 {waiting[0].display_name}" if waiting else ""))
+        else:
+            self._nav_rail.set_badge("train", None)
+            self._queue_chip.finish()
 
     @staticmethod
     def _cleanup_training_dataset(job: _TrainingJob | None) -> None:
@@ -2119,6 +2421,8 @@ class MainWindow(QMainWindow):
             self._train_panel._btn_stop.setEnabled(False)
 
     def _on_training_cancelled(self) -> None:
+        self._train_task_chip.finish("已取消")
+        self._nav_rail.loop_ring().set_training(False)
         if self._train_panel:
             self._train_panel.on_training_cancelled()
         job, _had_multiple = self._training_queue.finish_active()
@@ -2130,6 +2434,8 @@ class MainWindow(QMainWindow):
             self._training_batch_started_jobs = 0
 
     def _on_training_error(self, error_msg: str) -> None:
+        self._train_task_chip.finish("失败")
+        self._nav_rail.loop_ring().set_training(False)
         if self._train_panel:
             self._train_panel.on_training_error(error_msg)
         job, _had_multiple = self._training_queue.finish_active()
@@ -2142,6 +2448,8 @@ class MainWindow(QMainWindow):
             self._training_batch_started_jobs = 0
 
     def _on_training_finished(self, metrics: dict) -> None:
+        self._train_task_chip.finish("完成")
+        self._nav_rail.loop_ring().set_training(False)
         if self._train_panel:
             self._train_panel.on_training_finished(metrics)
         try:

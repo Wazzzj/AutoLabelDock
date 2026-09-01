@@ -12,8 +12,8 @@ import shutil
 from collections import OrderedDict
 from pathlib import Path
 
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QKeySequence
+from PyQt5.QtCore import Qt, pyqtSignal, QRect, QSize
+from PyQt5.QtGui import QFont, QFontMetrics, QKeySequence, QPainter, QColor
 from PyQt5.QtWidgets import (
     QApplication,
     QWidget,
@@ -23,7 +23,10 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QToolBar,
     QToolButton,
+    QMenu,
+    QSizePolicy,
     QLabel,
+    QCheckBox,
     QComboBox,
     QLineEdit,
     QPlainTextEdit,
@@ -38,12 +41,49 @@ from src.core.tags import TagFilter
 from src.ui.icons import icon
 from src.ui.locateanything_bar import LocateAnythingBar
 from src.ui.tag_widget import TagApplyBar, TagFilterBar
-from src.ui.theme import set_button_role
+from src.ui.theme import PALETTE, set_button_role
 from src.ui.views.base import TaskView
 from src.utils.image import ImageCache
 from src.utils.undo import UndoStack
 
 logger = logging.getLogger(__name__)
+
+
+class _ToggleSwitch(QCheckBox):
+    """设计稿样式胶囊开关：胶囊 + 滑块圆点 + 右侧文字。"""
+
+    def __init__(self, text: str, parent=None):
+        super().__init__(text, parent)
+        self.setCursor(Qt.PointingHandCursor)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        from PyQt5.QtGui import QFontMetrics
+
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        checked = self.isChecked()
+        pill_w, pill_h = 34, 18
+        y = int((self.height() - pill_h) / 2)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(PALETTE["primary"] if checked
+                          else PALETTE["line_strong"]))
+        p.drawRoundedRect(0, y, pill_w, pill_h, 9, 9)
+        knob = pill_h - 4
+        kx = (pill_w - knob - 2) if checked else 2
+        p.setBrush(QColor("#FFFFFF"))
+        p.drawEllipse(int(kx), int(y + 2), knob, knob)
+        p.setPen(QColor(PALETTE["text"] if checked else PALETTE["text_muted"]))
+        f = QFont(self.font())
+        f.setPixelSize(12)
+        p.setFont(f)
+        tx = pill_w + 8
+        p.drawText(QRect(tx, 0, self.width() - tx, self.height()),
+                   Qt.AlignVCenter | Qt.AlignLeft, self.text())
+        p.end()
+
+    def sizeHint(self) -> "QSize":
+        fm = QFontMetrics(self.font())
+        return QSize(34 + 8 + fm.horizontalAdvance(self.text()) + 6, 24)
 
 
 class LabelPanel(QWidget):
@@ -70,6 +110,10 @@ class LabelPanel(QWidget):
     la_enable_requested = pyqtSignal()
     la_disable_requested = pyqtSignal()
     la_query_changed = pyqtSignal(str, object)  # (prompt, target_class | None)
+    # 设计稿检查器链接：在新窗口预览 / 数据版本管理 / Tag 管理
+    open_preview_requested = pyqtSignal()
+    manage_data_folders_requested = pyqtSignal()
+    tag_manage_requested = pyqtSignal()
 
     _UNDO_MAX_IMAGES = 20
 
@@ -95,78 +139,147 @@ class LabelPanel(QWidget):
 
         self._toolbar = QToolBar()
         self._toolbar.setMovable(False)
+        self._toolbar.setObjectName("annotationToolbar")
+        self._toolbar.setStyleSheet(
+            "QToolBar#annotationToolbar{background:transparent;border:none;"
+            "padding:2px 4px;spacing:6px;}"
+            "QToolBar#annotationToolbar::separator{width:1px;margin:4px 8px;"
+            "background:" + PALETTE["line_strong"] + ";}"
+            # 设计稿：扁平按钮，无默认玻璃底
+            "QToolBar#annotationToolbar QPushButton{background:transparent;"
+            "border:1px solid transparent;border-radius:8px;padding:0 12px;"
+            "color:" + PALETTE["text_muted"] + ";font-weight:600;}"
+            "QToolBar#annotationToolbar QPushButton:hover{color:"
+            + PALETTE["text"] + ";background:" + PALETTE["panel"] + ";}"
+            "QToolBar#annotationToolbar QPushButton:checked{color:"
+            + PALETTE["primary"] + ";background:" + PALETTE["primary_soft"] + ";}"
+        )
 
+        # 自动标注（确认本图在视图工具条内，随注入一并出现在最左）
         self._btn_auto_single = QPushButton(icon("auto_label"), "自动标注")
         self._btn_auto_single.setToolTip("对当前图片执行自动标注 (Shift+A)")
-        set_button_role(self._btn_auto_single, "primary")
-        self._toolbar.addWidget(self._btn_auto_single)
+        self._btn_auto_single.setFixedHeight(30)
 
-        self._btn_auto_batch = QPushButton(icon("batch"), "批量标注")
-        self._btn_auto_batch.setToolTip("对多张图片执行批量自动标注 (Ctrl+Shift+A)")
-        set_button_role(self._btn_auto_batch, "secondary")
-        self._toolbar.addWidget(self._btn_auto_batch)
-
-        # LocateAnything text-labeling bar (collapsed to one button until enabled).
+        # LocateAnything text-labeling bar (slim row, hidden by default).
         self._la_bar = LocateAnythingBar()
-        self._toolbar.addWidget(self._la_bar)
+        self._la_bar.hide()
+        layout.addWidget(self._la_bar)
 
-        self._toolbar.addSeparator()
-
+        # 隐藏保留的控件（功能经由“更多”菜单与快捷键；测试引用其 tooltip）
         self._btn_undo = QPushButton(icon("undo"), "")
         self._btn_undo.setToolTip("回撤 (Ctrl+Z)")
-        self._btn_undo.setFixedWidth(36)
+        self._btn_undo.setFixedSize(32, 30)
         set_button_role(self._btn_undo, "icon")
-        self._toolbar.addWidget(self._btn_undo)
+        self._btn_undo.hide()
 
         self._btn_redo = QPushButton(icon("redo"), "")
         self._btn_redo.setToolTip("前进 (Ctrl+Y)")
-        self._btn_redo.setFixedWidth(36)
+        self._btn_redo.setFixedSize(32, 30)
         set_button_role(self._btn_redo, "icon")
-        self._toolbar.addWidget(self._btn_redo)
+        self._btn_redo.hide()
 
         self._btn_save = QPushButton(icon("save"), "")
         self._btn_save.setToolTip("保存 (Ctrl+S)")
-        self._btn_save.setFixedWidth(36)
+        self._btn_save.setFixedSize(32, 30)
         set_button_role(self._btn_save, "icon")
-        self._toolbar.addWidget(self._btn_save)
+        self._btn_save.hide()
 
-        self._toolbar.addSeparator()
+        self._btn_auto_batch = QPushButton(icon("batch"), "批量标注")
+        self._btn_auto_batch.setToolTip("对多张图片执行批量自动标注 (Ctrl+Shift+A)")
+        self._btn_auto_batch.setFixedHeight(30)
+        set_button_role(self._btn_auto_batch, "secondary")
+        self._btn_auto_batch.hide()
 
         self._filter_combo = QComboBox()
         self._filter_combo.addItems(["全部", "已确认", "待确认", "未标注"])
-        self._filter_combo.setMinimumWidth(80)
-        self._toolbar.addWidget(QLabel(" 筛选: "))
-        self._toolbar.addWidget(self._filter_combo)
+        self._filter_combo.setMinimumWidth(76)
+        self._filter_combo.setFixedHeight(28)
 
         self._class_filter_combo = QComboBox()
         self._class_filter_combo.addItem("所有类别")
-        self._class_filter_combo.setMinimumWidth(80)
-        self._toolbar.addWidget(QLabel(" 类别: "))
-        self._toolbar.addWidget(self._class_filter_combo)
+        self._class_filter_combo.setMinimumWidth(76)
+        self._class_filter_combo.setFixedHeight(28)
 
-        self._tag_filter_bar = TagFilterBar()
-        self._toolbar.addWidget(self._tag_filter_bar)
+        # “更多”菜单内宿主的筛选容器（只建一次；菜单 clear 会销毁
+        # QWidgetAction 的默认 widget，重建前必须先摘下）
+        self._filter_host = QWidget()
+        fh = QHBoxLayout(self._filter_host)
+        fh.setContentsMargins(8, 4, 8, 4)
+        fh.setSpacing(6)
+        fh.addWidget(QLabel("筛选:"))
+        fh.addWidget(self._filter_combo)
+        fh.addWidget(QLabel("类别:"))
+        fh.addWidget(self._class_filter_combo)
 
-        self._toolbar.addSeparator()
         self._refresh_btn = QToolButton()
         self._refresh_btn.setIcon(icon("refresh"))
         self._refresh_btn.setToolTip("刷新图像列表 (F5)")
         self._refresh_btn.setEnabled(False)
         self._refresh_btn.clicked.connect(self._on_refresh_clicked)
-        self._toolbar.addWidget(self._refresh_btn)
+        self._refresh_btn.hide()
+
+        # 右侧三开关（设计稿：胶囊滑块样式）
+        self._toggle_classes = _ToggleSwitch("显示类别")
+        self._toggle_classes.setChecked(True)
+        self._toggle_area = _ToggleSwitch("显示面积")
+        self._toggle_area.setChecked(True)
+        self._toggle_dim = _ToggleSwitch("暗化已确认")
+        for cb in (self._toggle_classes, self._toggle_area, self._toggle_dim):
+            cb.toggled.connect(self._on_canvas_toggles_changed)
+
+        self._more_btn = QToolButton()
+        self._more_btn.setText("更多 ⌄")
+        self._more_btn.setPopupMode(QToolButton.InstantPopup)
+        self._more_btn.setFixedHeight(30)
+        self._more_btn.setStyleSheet(
+            "QToolButton{border:1px solid " + PALETTE["line_strong"]
+            + ";border-radius:8px;padding:0 10px;color:" + PALETTE["text_muted"]
+            + ";background:transparent;}"
+            "QToolButton:hover{color:" + PALETTE["text"]
+            + ";border-color:" + PALETTE["primary"] + ";}"
+            "QToolButton::menu-indicator{image:none;}"
+        )
+        self._more_menu = QMenu(self._more_btn)
+        self._more_btn.setMenu(self._more_menu)
+
+        # 组装：[视图工具条(注入)] │ 自动标注 │⟶│ 开关×3 │ 更多
+        self._auto_action = self._toolbar.addWidget(self._btn_auto_single)
+        self._toolbar.addSeparator()
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self._toolbar.addWidget(spacer)
+        self._toolbar.addWidget(self._toggle_classes)
+        self._toolbar.addWidget(self._toggle_area)
+        self._toolbar.addWidget(self._toggle_dim)
+        self._toolbar.addWidget(self._more_btn)
 
         layout.addWidget(self._toolbar)
 
-        # Tag apply strip: click a chip, then press T to batch-apply it.
+        # 隐藏式辅助条：Tag 筛选 / Tag 批量应用（“更多”菜单切换）
+        self._tag_filter_bar = TagFilterBar()
+        self._tag_filter_bar.hide()
+        self._filter_row = QWidget()
+        fr = QHBoxLayout(self._filter_row)
+        fr.setContentsMargins(4, 0, 4, 0)
+        fr.addWidget(self._tag_filter_bar)
+        fr.addStretch(1)
+        layout.addWidget(self._filter_row)
+
         self._apply_bar = TagApplyBar(self)
         self._apply_bar.apply_requested.connect(self._apply_armed_tag)
+        self._apply_bar.hide()
         layout.addWidget(self._apply_bar)
 
         self._tag_apply_shortcut = QShortcut(QKeySequence("T"), self)
         self._tag_apply_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
         self._tag_apply_shortcut.activated.connect(self._on_apply_tag_shortcut)
 
-        # Refresh strip
+        # 文件列表抽屉快捷键 Ctrl+L
+        self._file_list_shortcut = QShortcut(QKeySequence("Ctrl+L"), self)
+        self._file_list_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self._file_list_shortcut.activated.connect(self._toggle_file_list)
+
+        # 刷新 strip（保留历史结构）
         refresh_strip = QWidget()
         refresh_strip.setMaximumHeight(28)
         rs_layout = QHBoxLayout(refresh_strip)
@@ -187,6 +300,111 @@ class LabelPanel(QWidget):
         self._view_layout.setContentsMargins(0, 0, 0, 0)
         self._view_layout.setSpacing(0)
         layout.addWidget(self._view_container, 1)
+
+        self._rebuild_more_menu()
+
+    def _on_canvas_toggles_changed(self) -> None:
+        """显示类别 / 显示面积 / 暗化已确认 → 画布绘制开关。"""
+        if self._view is None or not hasattr(self._view, "_canvas"):
+            return
+        canvas = self._view._canvas
+        canvas.set_label_toggles(
+            self._toggle_classes.isChecked(),
+            self._toggle_area.isChecked(),
+        )
+        canvas.set_dim_confirmed(self._toggle_dim.isChecked())
+
+    def _rebuild_more_menu(self) -> None:
+        """“更多”菜单：低频功能入口（设计稿单行工具栏的收纳区）。"""
+        menu = self._more_menu
+        menu.clear()
+        menu.addAction(
+            "撤销可见预标注",
+            lambda: self._view.revert_button().click()
+            if self._view is not None and hasattr(self._view, "revert_button")
+            else None,
+        )
+        menu.addAction(
+            "清空当前图片全部标注",
+            lambda: getattr(self._view, "_ann_panel", None)
+            and self._view._ann_panel.clear_all_annotations_requested.emit()
+            if self._view is not None and hasattr(self._view, "_ann_panel")
+            else None,
+        )
+        menu.addAction(
+            ("隐藏文件列表" if self._file_list_visible() else "显示文件列表")
+            + " (Ctrl+L)",
+            self._toggle_file_list,
+        )
+        menu.addSeparator()
+        menu.addAction(
+            ("隐藏" if not self._la_bar.isHidden() else "显示") + "文本标注条",
+            self._toggle_la_bar,
+        )
+        menu.addAction(
+            ("隐藏" if self._tag_filter_bar.isHidden() else "显示") + "Tag 筛选条",
+            self._toggle_tag_filter_row,
+        )
+        menu.addAction(
+            ("隐藏" if self._apply_bar.isHidden() else "显示") + "Tag 批量应用条",
+            self._toggle_apply_bar,
+        )
+        menu.addSeparator()
+        menu.addAction("批量标注 (Ctrl+Shift+A)",
+                       lambda: self._btn_auto_batch.click())
+        menu.addAction("回撤 (Ctrl+Z)", self.undo)
+        menu.addAction("前进 (Ctrl+Y)", self.redo)
+        menu.addAction("保存 (Ctrl+S)", self.save_and_cleanup)
+        menu.addSeparator()
+
+        menu.addAction("筛选与类别…", self._open_filter_dialog)
+
+        menu.addSeparator()
+        refresh_action = menu.addAction("刷新图像列表 (F5)", self._on_refresh_clicked)
+        refresh_action.setEnabled(self._refresh_btn.isEnabled())
+
+    def _file_list_visible(self) -> bool:
+        return (
+            self._view is not None
+            and hasattr(self._view, "_left_pane")
+            and self._view._left_pane.isVisible()
+        )
+
+    def _toggle_file_list(self) -> None:
+        if self._view is not None and hasattr(self._view, "toggle_file_list"):
+            self._view.toggle_file_list()
+            self._rebuild_more_menu()
+
+    def _open_filter_dialog(self) -> None:
+        """“筛选与类别”小对话框（复用既有下拉控件）。"""
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QDialogButtonBox
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("筛选与类别")
+        v = QVBoxLayout(dlg)
+        v.addWidget(QLabel("状态筛选:"))
+        v.addWidget(self._filter_combo)
+        v.addWidget(QLabel("类别筛选:"))
+        v.addWidget(self._class_filter_combo)
+        btns = QDialogButtonBox(QDialogButtonBox.Close, parent=dlg)
+        btns.rejected.connect(dlg.reject)
+        btns.clicked.connect(lambda *_: dlg.accept())
+        v.addWidget(btns)
+        dlg.exec_()
+
+    def _toggle_la_bar(self) -> None:
+        if not getattr(self, "_la_visible_allowed", True):
+            return
+        self._la_bar.setVisible(self._la_bar.isHidden())
+        self._rebuild_more_menu()
+
+    def _toggle_tag_filter_row(self) -> None:
+        self._filter_row.setVisible(self._filter_row.isHidden())
+        self._rebuild_more_menu()
+
+    def _toggle_apply_bar(self) -> None:
+        self._apply_bar.setVisible(self._apply_bar.isHidden())
+        self._rebuild_more_menu()
 
     def _connect_signals(self) -> None:
         self._btn_auto_single.clicked.connect(self.auto_label_single_requested.emit)
@@ -219,6 +437,9 @@ class LabelPanel(QWidget):
         if self._view is not None:
             if hasattr(self._view, "cleanup"):
                 self._view.cleanup()
+            # 先移除旧工具条（避免多次 set_project 累积出重复工具按钮）
+            if hasattr(self._view, "tools_strip"):
+                self._toolbar.removeWidget(self._view.tools_strip())
             self._view_layout.removeWidget(self._view)
             self._view.setParent(None)
             self._view.deleteLater()
@@ -240,6 +461,10 @@ class LabelPanel(QWidget):
             self._view = DetectPoseView(self._image_cache, self._undo_stacks)
         self._view_layout.addWidget(self._view)
 
+        # 设计稿单行工具栏：把视图工具条注入到“自动标注”之前
+        if hasattr(self._view, "tools_strip"):
+            self._toolbar.insertWidget(self._auto_action, self._view.tools_strip())
+
         # Push cached AnnotationPanel state into the new view (no-op for classify).
         if hasattr(self._view, "_ann_panel") and self._pending_ann_panel_state:
             self._view._ann_panel.restore_state(self._pending_ann_panel_state)
@@ -250,6 +475,12 @@ class LabelPanel(QWidget):
         self._view.images_dropped.connect(self._on_images_dropped)
         self._view.classes_changed.connect(self._on_view_classes_changed)
         self._view.user_tags_changed.connect(self._on_view_user_tags_changed)
+        if hasattr(self._view, "_ann_panel"):
+            ap = self._view._ann_panel
+            ap.open_preview_requested.connect(self.open_preview_requested.emit)
+            ap.manage_data_folders_requested.connect(
+                self.manage_data_folders_requested.emit)
+            ap.tag_manage_requested.connect(self.tag_manage_requested.emit)
 
         # Push project state to the view
         colors = {cls: project.config.get_class_color(cls) for cls in project.config.classes}
@@ -265,6 +496,7 @@ class LabelPanel(QWidget):
         self._la_bar.set_classes(project.config.classes)
 
         self._refresh_btn.setEnabled(True)
+        self._rebuild_more_menu()
         logger.info("Project loaded: %s (task=%s)", project.config.name, task_type)
 
     def _on_view_classes_changed(self) -> None:
@@ -432,8 +664,14 @@ class LabelPanel(QWidget):
         self._la_bar.set_enabled_state(enabled)
 
     def set_la_feature_visible(self, visible: bool) -> None:
-        """Fully show/hide the LA toolbar (experimental master switch)."""
-        self._la_bar.set_feature_visible(visible)
+        """LA 功能总开关。
+
+        设计稿不常驻 LA 条：无论开关与否，条本身默认隐藏，
+        需要时经“更多 ⌄ → 文本标注条”呼出。
+        """
+        self._la_visible_allowed = bool(visible)
+        if not visible:
+            self._la_bar.hide()
 
     def set_la_status(self, message: str) -> None:
         """Show a transient status string on the LA bar (during load)."""

@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>方案 A · 分类工作区 — AutoLabel Dock 重设计</title>
+<style>
+:root{
+  --bg:#0B0F16;--bg-deep:#070A10;--panel:#101623;--panel-2:#141C2C;--line:#1E2838;--line-strong:#2C3A50;
+  --text:#E8EEF7;--text-2:#9FB0C8;--text-3:#5D6E88;--accent:#4D9FFF;--accent-dim:#1E3A5F;
+  --ok:#3ECF8E;--warn:#F5B83D;--bad:#F16A5D;--mono:"SF Mono",ui-monospace,Menlo,monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,"PingFang SC","Noto Sans SC",sans-serif;
+  font-size:13px;overflow:hidden;-webkit-font-smoothing:antialiased}
+.app{display:grid;grid-template-columns:56px 1fr 292px;grid-template-rows:44px 1fr 34px;height:100vh;
+  grid-template-areas:"rail topbar topbar" "rail main inspector" "rail tasks tasks"}
+.rail{grid-area:rail;background:var(--bg-deep);border-right:1px solid var(--line);display:flex;flex-direction:column;
+  align-items:center;padding:10px 0 12px;gap:2px;z-index:30}
+.logo{width:34px;height:34px;margin-bottom:10px}
+.nav-btn{width:42px;height:42px;border-radius:10px;display:flex;align-items:center;justify-content:center;color:var(--text-3);
+  cursor:pointer;position:relative;margin-bottom:2px;border:1px solid transparent;transition:all .15s}
+.nav-btn:hover{color:var(--text-2);background:var(--panel)}
+.nav-btn.active{color:var(--accent);background:var(--accent-dim);border-color:#2B4A75}
+.nav-btn .badge{position:absolute;top:4px;right:4px;min-width:15px;height:15px;padding:0 4px;border-radius:8px;
+  background:var(--bad);color:#fff;font-size:9px;font-weight:600;display:flex;align-items:center;justify-content:center}
+.nav-btn .badge.blue{background:var(--accent)}
+.nav-tip{position:absolute;left:52px;top:50%;transform:translateY(-50%);background:#1A2334;border:1px solid var(--line-strong);
+  padding:5px 9px;border-radius:6px;font-size:12px;white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .12s;z-index:99}
+.nav-btn:hover .nav-tip{opacity:1}
+.rail-ic{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.rail-spacer{flex:1}
+.loop-ring{width:40px;height:40px;position:relative;cursor:pointer;margin-bottom:8px}
+.loop-ring .nav-tip{width:170px}
+.topbar{grid-area:topbar;background:var(--panel);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:14px;padding:0 14px}
+.proj{display:flex;align-items:center;gap:9px;padding:5px 10px 5px 6px;border-radius:8px;cursor:pointer;border:1px solid transparent}
+.proj:hover{background:var(--panel-2);border-color:var(--line)}
+.proj-dot{width:22px;height:22px;border-radius:6px;background:linear-gradient(135deg,#12332B,#0A1F19);display:flex;
+  align-items:center;justify-content:center;font-size:10px;color:var(--ok);font-weight:700}
+.proj b{font-size:13px;font-weight:600}
+.proj .task-tag{font-size:10px;color:var(--ok);background:rgba(62,207,142,.12);padding:2px 6px;border-radius:4px;margin-left:2px}
+.proj svg{width:12px;height:12px;stroke:var(--text-3)}
+.cmdk{flex:1;max-width:420px;height:28px;background:var(--bg);border:1px solid var(--line);border-radius:7px;display:flex;
+  align-items:center;gap:8px;padding:0 10px;color:var(--text-3)}
+.cmdk svg{width:13px;height:13px;stroke:var(--text-3)}
+.cmdk span{font-size:12px}
+.cmdk kbd{margin-left:auto;font-family:var(--mono);font-size:10px;border:1px solid var(--line-strong);border-radius:4px;padding:1px 5px}
+.chip{display:flex;align-items:center;gap:6px;height:26px;padding:0 10px;border-radius:7px;background:var(--bg);
+  border:1px solid var(--line);font-size:11.5px;color:var(--text-2)}
+.chip .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);box-shadow:0 0 5px var(--ok)}
+.chip b{color:var(--text);font-weight:600}
+.main{grid-area:main;display:flex;flex-direction:column;min-width:0;background:var(--bg)}
+.subbar{height:42px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:6px;padding:0 12px;background:var(--panel)}
+.clsbtn{display:flex;align-items:center;gap:7px;height:30px;padding:0 11px;border-radius:8px;border:1px solid var(--line-strong);
+  background:var(--panel-2);cursor:pointer;font-size:12px;color:var(--text-2);white-space:nowrap;flex-shrink:0}
+.clsbtn:hover{color:var(--text)}
+.clsbtn .num{font-family:var(--mono);font-size:9.5px;color:var(--text-3);border:1px solid var(--line-strong);border-radius:4px;padding:0 4px}
+.clsbtn .sw{width:10px;height:10px;border-radius:3px}
+.clsbtn .cnt{font-family:var(--mono);font-size:10.5px;color:var(--text-3)}
+.tool{display:flex;align-items:center;gap:5px;height:30px;padding:0 8px;border-radius:7px;color:var(--text-2);
+  cursor:pointer;border:1px solid transparent;font-size:12px;white-space:nowrap;flex-shrink:0}
+.tool:hover{background:var(--panel-2);color:var(--text)}
+.tool svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.tool kbd{font-family:var(--mono);font-size:9.5px;color:var(--text-3)}
+.tool.danger:hover{color:var(--bad)}
+.vsep{width:1px;height:18px;background:var(--line-strong);margin:0 6px}
+.sub-right{margin-left:auto;display:flex;align-items:center;gap:10px;font-size:12px;color:var(--text-3)}
+/* 过滤行 */
+.filterline{height:36px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;padding:0 12px;background:var(--bg)}
+.fsel{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--text-3)}
+.fsel .box{background:var(--panel);border:1px solid var(--line);border-radius:6px;height:24px;padding:0 9px;
+  display:flex;align-items:center;gap:5px;color:var(--text-2);font-size:11.5px}
+.fsel .box svg{width:10px;height:10px;stroke:var(--text-3)}
+.density{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--text-3);margin-left:auto}
+.density .track{width:110px;height:4px;border-radius:2px;background:var(--line);position:relative}
+.density .track i{position:absolute;left:56%;top:-4px;width:12px;height:12px;border-radius:50%;background:var(--accent)}
+/* 网格 */
+.gridwrap{flex:1;overflow-y:auto;padding:14px}
+.cgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:10px}
+.cell{background:var(--panel);border:1.6px solid var(--line);border-radius:10px;overflow:hidden;cursor:pointer;position:relative}
+.cell:hover{border-color:var(--line-strong)}
+.cell.sel{border-color:var(--accent)}
+.cell .im{height:104px;background:linear-gradient(135deg,#1B222E,#121823);position:relative;display:flex;align-items:center;justify-content:center}
+.cell .im svg{width:64px;height:64px}
+.cell .st{position:absolute;top:6px;right:6px;width:8px;height:8px;border-radius:50%}
+.cell .st.ok{background:var(--ok)}.cell .st.wn{background:var(--warn)}.cell .st.ns{background:#3A474D}
+.cell .no{position:absolute;top:5px;left:7px;font-family:var(--mono);font-size:9px;color:rgba(232,238,247,.55)}
+.cell .bar{height:22px;display:flex;align-items:center;gap:6px;padding:0 8px;font-size:10.5px}
+.cell .bar i{width:8px;height:8px;border-radius:2.5px}
+.cell .bar b{color:var(--text-2);font-weight:600}
+.cell .bar .ck{margin-left:auto;color:var(--ok);font-size:10px}
+.cell .bar .pd{margin-left:auto;color:var(--warn);font-size:10px}
+/* 检查器 */
+.inspector{grid-area:inspector;background:var(--panel);border-left:1px solid var(--line);overflow-y:auto;display:flex;flex-direction:column}
+.insp-sec{border-bottom:1px solid var(--line);padding:12px 14px}
+.insp-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.insp-h .t{font-size:10.5px;font-weight:600;letter-spacing:.12em;color:var(--text-3)}
+.insp-h .x{font-size:11px;color:var(--text-3);cursor:pointer}
+.insp-h .x:hover{color:var(--accent)}
+.kv{display:grid;grid-template-columns:72px 1fr;row-gap:7px;font-size:12px}
+.kv .k{color:var(--text-3)}
+.kv .v{color:var(--text)}
+.kv .v.mono{font-family:var(--mono);font-size:11.5px}
+.st-pill{display:inline-flex;align-items:center;gap:5px;padding:1px 8px;border-radius:5px;font-size:11px}
+.st-pill .d{width:5px;height:5px;border-radius:50%}
+.st-pill.conf{background:rgba(62,207,142,.12);color:var(--ok)}.st-pill.conf .d{background:var(--ok)}
+.dist-row{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-2);margin-bottom:9px}
+.dist-row .sw{width:11px;height:11px;border-radius:3px}
+.dist-row .bar{flex:1;height:5px;border-radius:3px;background:var(--line);overflow:hidden}
+.dist-row .bar i{display:block;height:100%}
+.dist-row .n{font-family:var(--mono);font-size:10.5px;color:var(--text-3)}
+.btn{height:32px;border-radius:8px;border:1px solid var(--line-strong);background:var(--panel-2);color:var(--text);
+  font-size:12.5px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;width:100%}
+.btn:hover{border-color:var(--accent);color:var(--accent)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#04121F;font-weight:600}
+.btn-row{display:flex;gap:8px;margin-bottom:8px}
+.btn-row .btn{flex:1}
+.hint{font-size:11px;color:var(--text-3);line-height:1.65}
+kbd{font-family:var(--mono);font-size:9.5px;color:var(--text-2);border:1px solid var(--line-strong);border-radius:4px;padding:1px 4px}
+.tasks{grid-area:tasks;background:var(--bg-deep);border-top:1px solid var(--line);display:flex;align-items:center;
+  padding:0 14px;gap:18px;font-size:11.5px;color:var(--text-2)}
+.task{display:flex;align-items:center;gap:9px}
+.task .sp{width:90px;height:4px;border-radius:2px;background:var(--line);overflow:hidden}
+.task .sp i{display:block;height:100%;background:var(--warn)}
+.task .lb{font-family:var(--mono);font-size:10.5px}
+.tstat{margin-left:auto;display:flex;gap:16px;font-family:var(--mono);font-size:10.5px;color:var(--text-3)}
+</style>
+</head>
+<body>
+<div class="app">
+  <nav class="rail">
+    <svg class="logo" viewBox="0 0 34 34" width="34" height="34">
+      <circle cx="17" cy="17" r="14" fill="none" stroke="#24344E" stroke-width="2"/>
+      <circle cx="17" cy="17" r="8.5" fill="none" stroke="#4D9FFF" stroke-width="2"/><circle cx="17" cy="17" r="2.6" fill="#4D9FFF"/>
+    </svg>
+    <div class="nav-btn"><svg class="rail-ic" viewBox="0 0 24 24"><path d="M3 11l9-8 9 8M5 10v10h5v-6h4v6h5V10"/></svg><span class="nav-tip">主页</span></div>
+    <div class="nav-btn active"><svg class="rail-ic" viewBox="0 0 24 24"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg><span class="nav-tip">标注 · 分类项目</span><span class="badge blue">CLS</span></div>
+    <div class="nav-btn"><svg class="rail-ic" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><span class="nav-tip">预览</span></div>
+    <div class="nav-btn"><svg class="rail-ic" viewBox="0 0 24 24"><path d="M3 17l5-6 4 4 6-8 3 4"/><path d="M3 21h18"/></svg><span class="nav-tip">训练 · 队列中 1</span><span class="badge">1</span></div>
+    <div class="nav-btn"><svg class="rail-ic" viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg><span class="nav-tip">模型</span></div>
+    <div class="nav-btn"><svg class="rail-ic" viewBox="0 0 24 24"><path d="M8 9l-4 3 4 3M16 9l4 3-4 3M13 5l-2 14"/></svg><span class="nav-tip">小工具</span></div>
+    <div class="rail-spacer"></div>
+    <div class="loop-ring">
+      <span class="nav-tip"><b style="color:var(--text)">闭环进度</b><br>已确认 9,640/10,028 · 96%</span>
+      <svg viewBox="0 0 40 40" width="40" height="40">
+        <circle cx="20" cy="20" r="16" fill="none" stroke="#1B2536" stroke-width="3.5"/>
+        <circle cx="20" cy="20" r="16" fill="none" stroke="#3ECF8E" stroke-width="3.5" stroke-dasharray="96.5 100.5"
+          stroke-linecap="round" transform="rotate(-90 20 20)"/>
+        <text x="20" y="23.5" text-anchor="middle" font-size="10" fill="#E8EEF7" font-family="SF Mono,monospace">96%</text>
+      </svg>
+    </div>
+    <div class="nav-btn"><svg class="rail-ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2z"/></svg><span class="nav-tip">设置</span></div>
+  </nav>
+
+  <header class="topbar">
+    <div class="proj"><div class="proj-dot">猫狗</div><b>Demo-cs</b><span class="task-tag">classify</span>
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></div>
+    <div class="cmdk"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+      <span>搜索图片、类别、模型或命令…</span><kbd>⌘K</kbd></div>
+    <div style="margin-left:auto;display:flex;gap:8px">
+      <span class="chip"><span class="dot"></span> CUDA:0 · 8.2/12 GB</span>
+      <span class="chip">图片 <b>10,028</b></span>
+    </div>
+  </header>
+
+  <main class="main">
+    <div class="subbar">
+      <div class="clsbtn"><span class="num">1</span><span class="sw" style="background:#4D9FFF"></span>cats<span class="cnt">6,213</span></div>
+      <div class="clsbtn"><span class="num">2</span><span class="sw" style="background:#F5B83D"></span>dogs<span class="cnt">3,427</span></div>
+      <div class="clsbtn"><span class="num">3</span><span class="sw" style="background:#3ECF8E"></span>rabbits<span class="cnt">388</span></div>
+      <div class="clsbtn" style="color:var(--text-3)">＋ 添加类别</div>
+      <div class="vsep"></div>
+      <div class="tool"><svg viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>全选可见<kbd>⌘A</kbd></div>
+      <div class="tool">反选</div>
+      <div class="tool"><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>确认全部</div>
+      <div class="tool">清除类别<kbd>⌫</kbd></div>
+      <div class="tool danger"><svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>删除图片<kbd>⌫</kbd></div>
+      <div class="sub-right"><span>已选 <b style="color:var(--accent)">3</b> 张 · 数字键打标作用于选中图片</span></div>
+    </div>
+
+    <div class="filterline">
+      <span class="fsel">状态<span class="box">全部<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></span></span>
+      <span class="fsel">类别<span class="box">所有类别<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></span></span>
+      <span class="fsel">排序<span class="box">按文件名<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></span></span>
+      <span class="fsel">Tag<span class="box">全部<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></span></span>
+      <div class="density">密度<span class="track"><i></i></span></div>
+    </div>
+
+    <div class="gridwrap">
+      <div class="cgrid">
+        <!-- 一组缩略卡片：猫/狗用简笔 SVG 区分 -->
+        <div class="cell"><div class="im"><svg viewBox="0 0 64 64"><circle cx="32" cy="34" r="16" fill="#8A93A5"/><circle cx="26" cy="30" r="2.5" fill="#12161D"/><circle cx="38" cy="30" r="2.5" fill="#12161D"/><path d="M28 39c2 2 6 2 8 0" stroke="#12161D" stroke-width="1.6" fill="none"/><path d="M20 22l4-7 5 5M44 22l-4-7-5 5" fill="#8A93A5"/></svg><span class="st ok"></span><span class="no">0231</span></div><div class="bar"><i style="background:#4D9FFF"></i><b>cats</b><span class="ck">✓ manual</span></div></div>
+        <div class="cell"><div class="im"><svg viewBox="0 0 64 64"><ellipse cx="32" cy="36" rx="17" ry="14" fill="#A98B62"/><circle cx="25" cy="32" r="2.5" fill="#12161D"/><circle cx="39" cy="32" r="2.5" fill="#12161D"/><ellipse cx="32" cy="40" rx="4" ry="3" fill="#12161D"/><path d="M18 22c2-6 8-8 10-4M46 22c-2-6-8-8-10-4" stroke="#A98B62" stroke-width="4" fill="none" stroke-linecap="round"/></svg><span class="st ok"></span><span class="no">0232</span></div><div class="bar"><i style="background:#F5B83D"></i><b>dogs</b><span class="ck">✓ auto</span></div></div>
+        <div class="cell sel"><div class="im"><svg viewBox="0 0 64 64"><circle cx="32" cy="34" r="16" fill="#C48A5A"/><circle cx="26" cy="30" r="2.5" fill="#12161D"/><circle cx="38" cy="30" r="2.5" fill="#12161D"/><path d="M28 39c2 2 6 2 8 0" stroke="#12161D" stroke-width="1.6" fill="none"/><path d="M22 20l-2-8 7 4M42 20l2-8-7 4" fill="#C48A5A"/></svg><span class="st wn"></span><span class="no">0233</span></div><div class="bar"><i style="background:#4D9FFF"></i><b>cats</b><span class="pd">待确认</span></div></div>
+        <div class="cell"><div class="im"><svg viewBox="0 0 64 64"><ellipse cx="32" cy="36" rx="17" ry="14" fill="#7E8B9C"/><circle cx="25" cy="32" r="2.5" fill="#12161D"/><circle cx="39" cy="32" r="2.5" fill="#12161D"/><ellipse cx="32" cy="40" rx="4" ry="3" fill="#12161D"/></svg><span class="st wn"></span><span class="no">0234</span></div><div class="bar"><i style="background:#F5B83D"></i><b>dogs</b><span class="pd">待确认</span></div></div>
+        <div class="cell"><div class="im"><svg viewBox="0 0 64 64"><circle cx="32" cy="34" r="15" fill="#9AA5B5"/><circle cx="26" cy="31" r="2.5" fill="#12161D"/><circle cx="38" cy="31" r="2.5" fill="#12161D"/><path d="M28 38c2 2 6 2 8 0" stroke="#12161D" stroke-width="1.6" fill="none"/><path d="M20 22l4-7 5 5M44 22l-4-7-5 5" fill="#9AA5B5"/></svg><span class="st ns"></span><span class="no">0235</span></div><div class="bar"><i style="background:#3A474D"></i><b>未分类</b></div></div>
+        <div class="cell"><div class="im"><svg viewBox="0 0 64 64"><ellipse cx="32" cy="36" rx="16" ry="13" fill="#B09268"/><circle cx="26" cy="33" r="2.5" fill="#12161D"/><circle cx="38" cy="33" r="2.5" fill="#12161D"/><ellipse cx="32" cy="40" rx="4" ry="3" fill="#12161D"/><path d="M14 36c2 6 8 8 10 6M50 36c-2 6-8 8-10 6" stroke="#B09268" stroke-width="3.4" fill="none" stroke-linecap="round"/></svg><span class="st ok"></span><span class="no">0236</span></div><div class="bar"><i style="background:#3ECF8E"></i><b>rabbits</b><span class="ck">✓ auto</span></div></div>
+        <div class="cell"><div class="im"><svg viewBox="0 0 64 64"><circle cx="32" cy="34" r="16" fill="#8A93A5"/><circle cx="26" cy="30" r="2.5" fill="#12161D"/><circle cx="38" cy="30" r="2.5" fill="#12161D"/><path d="M28 39c2 2 6 2 8 0" stroke="#12161D" stroke-width="1.6" fill="none"/><path d="M20 22l4-7 5 5M44 22l-4-7-5 5" fill="#8A93A5"/></svg><span class="st ok"></span><span class="no">0237</span></div><div class="bar"><i style="background:#4D9FFF"></i><b>cats</b><span class="ck">✓ manual</span></div></div>
+        <div class="cell"><div class="im"><svg viewBox="0 0 64 64"><ellipse cx="32" cy="36" rx="17" ry="14" fill="#A98B62"/><circle cx="25" cy="32" r="2.5" fill="#12161D"/><circle cx="39" cy="32" r="2.5" fill="#12161D"/><ellipse cx="32" cy="40" rx="4" ry="3" fill="#12161D"/></svg><span class="st ns"></span><span class="no">0238</span></div><div class="bar"><i style="background:#3A474D"></i><b>未分类</b></div></div>
+      </div>
+    </div>
+  </main>
+
+  <aside class="inspector">
+    <div class="insp-sec">
+      <div class="insp-h"><span class="t">选中图片 · 3 张</span><span class="x">清除选择</span></div>
+      <div class="kv">
+        <span class="k">代表文件</span><span class="v mono">cat_0233.jpg</span>
+        <span class="k">当前类别</span><span class="v">cats（2 张）/ dogs（1 张）</span>
+        <span class="k">状态</span><span class="v"><span class="st-pill conf"><span class="d"></span>混合 · 2 待确认</span></span>
+        <span class="k">来源</span><span class="v mono">auto · ring-cls-v2</span>
+      </div>
+    </div>
+    <div class="insp-sec">
+      <div class="insp-h"><span class="t">批量设置类别</span></div>
+      <div class="btn-row">
+        <button class="btn"><span style="width:9px;height:9px;border-radius:3px;background:#4D9FFF;display:inline-block"></span>cats <kbd>1</kbd></button>
+        <button class="btn"><span style="width:9px;height:9px;border-radius:3px;background:#F5B83D;display:inline-block"></span>dogs <kbd>2</kbd></button>
+      </div>
+      <div class="btn-row">
+        <button class="btn"><span style="width:9px;height:9px;border-radius:3px;background:#3ECF8E;display:inline-block"></span>rabbits <kbd>3</kbd></button>
+        <button class="btn">清除 <kbd>⌫</kbd></button>
+      </div>
+      <div style="height:6px"></div>
+      <button class="btn primary">确认全部待确认（自动标注）</button>
+    </div>
+    <div class="insp-sec">
+      <div class="insp-h"><span class="t">类别分布</span><span class="x">管理</span></div>
+      <div class="dist-row"><span class="sw" style="background:#4D9FFF"></span>cats<div class="bar"><i style="width:62%;background:#4D9FFF"></i></div><span class="n">6,213</span></div>
+      <div class="dist-row"><span class="sw" style="background:#F5B83D"></span>dogs<div class="bar"><i style="width:34%;background:#F5B83D"></i></div><span class="n">3,427</span></div>
+      <div class="dist-row"><span class="sw" style="background:#3ECF8E"></span>rabbits<div class="bar"><i style="width:4%;background:#3ECF8E"></i></div><span class="n">388</span></div>
+      <div class="hint" style="margin-top:8px">悬停缩略图可预览大图；点击右下 ⌘ 预览开关切换右侧大图面板。</div>
+    </div>
+    <div class="insp-sec" style="border-bottom:none">
+      <div class="insp-h"><span class="t">Tag</span><span class="x">管理</span></div>
+      <div class="hint"><kbd>T</kbd> 将武装 Tag 批量应用到选中图片 · 图片级 Tag 与分类标签互相独立</div>
+    </div>
+  </aside>
+
+  <footer class="tasks">
+    <div class="task">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#F5B83D" stroke-width="2"><rect x="4" y="6" width="16" height="12" rx="1"/></svg>
+      <span>批量确认</span><span class="sp"><i style="width:72%"></i></span><span class="lb" style="color:var(--text-3)">7,214/9,640</span>
+    </div>
+    <div class="task" style="color:var(--text-3)">数字键 1-9 直接打标 · Space 确认 · ⌫ 清除</div>
+    <div class="tstat"><span>项目 /home/demo/demo-cs</span><span>10,028 张</span><span>ImageFolder 兼容</span></div>
+  </footer>
+</div>
+</body>
+</html>

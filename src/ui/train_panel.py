@@ -28,6 +28,8 @@ from PyQt5.QtWidgets import (
     QFileDialog,
     QMessageBox,
     QSizePolicy,
+    QFrame,
+    QListWidgetItem,
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QEvent
 
@@ -73,6 +75,18 @@ _TASK_MODEL_SUFFIX = {
     "pose": "-pose",
     "obb": "-obb",
 }
+
+# 等宽字体（大数字 / 日志 / 队列说明，对齐设计稿 SF Mono；Menlo 优先避免字体缺失警告）
+_MONO_FONT = '"Menlo", "SF Mono", "Consolas", "monospace"'
+
+
+def _rgba(hex_color: str, alpha: float) -> str:
+    """Convert a #RRGGBB hex color into an rgba() string."""
+    h = hex_color.lstrip("#")
+    if len(h) != 6:
+        return hex_color
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
 
 
 def _detect_available_devices() -> list[str]:
@@ -175,15 +189,15 @@ _TASK_QUALITY_METRICS: dict[str, tuple[str, list[tuple[str, list[str]]]]] = {
     "segment": (
         "mAP (Segment)",
         [
-            ("Mask mAP50", ["metrics/mAP50(M)", "metrics/mAP50(B)", "mAP50"]),
-            ("Mask mAP50-95", ["metrics/mAP50-95(M)", "metrics/mAP50-95(B)", "mAP50-95"]),
+            ("mAP50", ["metrics/mAP50(M)", "metrics/mAP50(B)", "mAP50"]),
+            ("mAP50-95", ["metrics/mAP50-95(M)", "metrics/mAP50-95(B)", "mAP50-95"]),
         ],
     ),
     "pose": (
         "mAP (Pose)",
         [
-            ("Pose mAP50", ["metrics/mAP50(P)", "metrics/mAP50(B)"]),
-            ("Pose mAP50-95", ["metrics/mAP50-95(P)", "metrics/mAP50-95(B)"]),
+            ("mAP50", ["metrics/mAP50(P)", "metrics/mAP50(B)"]),
+            ("mAP50-95", ["metrics/mAP50-95(P)", "metrics/mAP50-95(B)"]),
         ],
     ),
     "classify": (
@@ -224,6 +238,70 @@ def _compute_val_loss(metrics: dict) -> float | None:
             except (TypeError, ValueError):
                 continue
     return total if found else None
+
+
+class _ChipSelect(QWidget):
+    """设计稿筛选芯片行：单选芯片（胶囊描边样式），选中发 selected(data)。"""
+
+    selected = pyqtSignal(str)
+
+    def __init__(self, options: list[tuple[str, str]], current: str | None = None,
+                 parent=None):
+        super().__init__(parent)
+        self._buttons: list[tuple[str, QPushButton]] = []
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+        self._row_layout = row
+        for text, data in options:
+            self._add_chip(text, data)
+        if current is not None:
+            self.set_current(current)
+
+    def _chip_qss(self) -> str:
+        return (
+            "QPushButton{background:transparent;border:1px solid "
+            + PALETTE["line_strong"] + ";border-radius:13px;padding:0 12px;"
+            "color:" + PALETTE["text_muted"] + ";font-size:12px;height:26px;}"
+            "QPushButton:checked{background:" + PALETTE["primary_soft"]
+            + ";border-color:" + PALETTE["primary"]
+            + ";color:" + PALETTE["primary"] + ";}"
+            "QPushButton:hover{color:" + PALETTE["text"] + ";}"
+        )
+
+    def _add_chip(self, text: str, data: str) -> None:
+        b = QPushButton(text)
+        b.setCheckable(True)
+        b.setCursor(Qt.PointingHandCursor)
+        b.setStyleSheet(self._chip_qss())
+        b.clicked.connect(lambda _=False, dd=data: self.selected.emit(dd))
+        self._row_layout.addWidget(b)
+        self._buttons.append((data, b))
+
+    def set_current(self, data: str) -> None:
+        """高亮所选 chip；空值代表"全部/默认桶"，不被高亮（设计稿）。"""
+        for d, b in self._buttons:
+            b.setChecked(d == data and bool(data))
+
+    def set_options(self, options: list[tuple[str, str]],
+                    current: str | None = None) -> None:
+        """重建芯片（数据版本列表变化时）。"""
+        while self._row_layout.count():
+            it = self._row_layout.takeAt(0)
+            w = it.widget()
+            if w is not None:
+                w.deleteLater()
+        self._buttons = []
+        for text, data in options:
+            self._add_chip(text, data)
+        if current is not None:
+            self.set_current(current)
+
+    def current_data(self) -> str | None:
+        for d, b in self._buttons:
+            if b.isChecked():
+                return d
+        return None
 
 
 class TrainPanel(QWidget):
@@ -326,58 +404,75 @@ class TrainPanel(QWidget):
         self._device_combo.addItems(list(_DEVICE_OPTIONS.keys()))
         task_form.addRow("设备:", self._device_combo)
 
-        # Kept for backward-compatible internals/tests; no longer shown in the UI.
+        # 训练模板：模板选择 + 存为/删除（设计稿“任务配置”组的 tpl 行）
         self._preset_combo = QComboBox()
         self._preset_combo.addItem("默认")
-        self._btn_save_template = QPushButton("保存为模板")
-        self._btn_delete_template = QPushButton("删除模板")
-        self._btn_save_template.hide()
-        self._btn_delete_template.hide()
+        self._preset_combo.setToolTip("选择训练参数模板；「默认」= 框架默认值")
+        self._btn_save_template = QPushButton("存为模板")
+        self._btn_delete_template = QPushButton("删模板")
+        set_button_role(self._btn_save_template, "secondary")
+        set_button_role(self._btn_delete_template, "secondary")
+        self._btn_save_template.setFixedHeight(28)
+        self._btn_delete_template.setFixedHeight(28)
+        tpl_row = QWidget()
+        tpl_layout = QHBoxLayout(tpl_row)
+        tpl_layout.setContentsMargins(0, 0, 0, 0)
+        tpl_layout.setSpacing(6)
+        tpl_layout.addWidget(self._preset_combo, 1)
+        tpl_layout.addWidget(self._btn_save_template)
+        tpl_layout.addWidget(self._btn_delete_template)
+        task_form.addRow("模板:", tpl_row)
 
         left_layout.addWidget(task_group)
 
-        # ── Dataset filter (by user-defined tags) ──
-        filter_group, filter_form = self._create_param_group("数据筛选", expanded=True)
+        # ── Dataset filter — 设计稿 insp-sec 芯片堆叠（无前缀标签） ──
+        filter_layout = QVBoxLayout()
+        filter_layout.setContentsMargins(0, 0, 0, 0)
+        filter_layout.setSpacing(8)
         self._data_folder_filter_combo = QComboBox()
         self._data_folder_filter_combo.addItem("全部版本", "")
-        self._data_folder_filter_combo.setToolTip(
-            "仅使用所选数据版本中的图片构建训练集"
-        )
-        filter_form.addRow("数据版本:", self._data_folder_filter_combo)
-
+        self._data_folder_filter_combo.setToolTip("仅使用所选数据版本中的图片构建训练集")
         self._status_filter_combo = QComboBox()
         self._status_filter_combo.addItems(["全部", "已确认", "待确认", "未标注"])
         self._status_filter_combo.setCurrentText("已确认")
-        filter_form.addRow("筛选:", self._status_filter_combo)
-
         self._class_filter_combo = QComboBox()
         self._class_filter_combo.addItem("所有类别")
-        self._class_filter_combo.setToolTip(
-            "选择具体类别时，只导出这个类别的标注并生成单类别训练数据。"
-        )
-        filter_form.addRow("训练类别:", self._class_filter_combo)
+        self._class_filter_combo.setToolTip("只导出该类别的标注并生成单类别训练数据")
+        # 表单控件保留为状态载体（隐藏）；筛选交互走设计稿芯片
+        for w in (self._data_folder_filter_combo, self._status_filter_combo,
+                  self._class_filter_combo):
+            w.hide()
 
         self._single_cls_check = QCheckBox("单类别训练 (single_cls)")
         self._single_cls_check.setToolTip(
-            "传入 YOLO single_cls=True：保留当前筛选后的所有目标，但训练时全部按一个类别处理。"
+            "传入 YOLO single_cls=True：保留当前筛选后所有目标，但训练时全部按一个类别处理。"
         )
-        filter_form.addRow("定位训练:", self._single_cls_check)
 
+        self._version_chips = _ChipSelect([("全部版本", "")])
+        self._version_chips.selected.connect(self._on_version_chip)
+        self._status_chips = _ChipSelect(
+            [("全部", "全部"), ("已确认", "已确认"),
+             ("待确认", "待确认"), ("未标注", "未标注")], current="已确认")
+        self._status_chips.selected.connect(self._on_status_chip)
+        self._class_chips = _ChipSelect([("所有类别", "")])
+        self._class_chips.selected.connect(self._on_class_chip)
+
+        filter_layout.addWidget(self._version_chips)
+        filter_layout.addWidget(self._status_chips)
+        filter_layout.addWidget(self._class_chips)
         self._tag_filter_bar = TagFilterBar()
-        filter_form.addRow("Tag:", self._tag_filter_bar)
+        filter_layout.addWidget(self._tag_filter_bar)
 
         self._filter_breakdown_label = QLabel("")
         self._filter_breakdown_label.setStyleSheet(text_style("hint"))
         self._filter_breakdown_label.setWordWrap(True)
         self._filter_breakdown_label.setVisible(False)
-        filter_form.addRow("", self._filter_breakdown_label)
+        filter_layout.addWidget(self._filter_breakdown_label)
 
-        filter_hint = QLabel(
-            "可选：仅用带有指定 tag 的图片构建训练集。留空使用全部已确认数据。"
-        )
+        filter_hint = QLabel("留空 Tag 则使用全部已确认数据。")
         filter_hint.setWordWrap(True)
         filter_hint.setStyleSheet(text_style("hint"))
-        filter_form.addRow("", filter_hint)
+        filter_layout.addWidget(filter_hint)
 
         # ── Basic hyperparameters ──
         hyper_group, hyper_form = self._create_param_group("训练参数", expanded=True)
@@ -444,7 +539,6 @@ class TrainPanel(QWidget):
         hyper_form.addRow("验证集比例:", self._val_ratio_spin)
 
         left_layout.addWidget(hyper_group)
-        left_layout.addWidget(filter_group)
 
         # ── Advanced optimizer params ──
         opt_group, opt_form = self._create_param_group("优化器高级参数")
@@ -721,30 +815,21 @@ class TrainPanel(QWidget):
         self._btn_clear_queue.setEnabled(False)
         self._btn_clear_queue.setToolTip("移除尚未开始的训练任务，不影响当前训练")
 
-        # Compact queue card. Queue maintenance lives in the header instead of
-        # competing with the primary actions below.
+        # 训练队列：设计稿 qitem 卡片直接排列（无外层框，标题行/清空等待由 q_section 提供）
         self._queue_container = QWidget()
-        self._queue_container.setObjectName("trainingQueueBox")
         self._queue_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         queue_layout = QVBoxLayout(self._queue_container)
-        queue_layout.setContentsMargins(8, 6, 8, 7)
-        queue_layout.setSpacing(4)
+        queue_layout.setContentsMargins(0, 0, 0, 0)
+        queue_layout.setSpacing(5)
 
-        queue_header = QHBoxLayout()
-        queue_header.setContentsMargins(2, 0, 0, 0)
-        self._queue_title = QLabel("训练队列")
-        self._queue_title.setStyleSheet(text_style("section"))
         self._queue_summary = QLabel()
         self._queue_summary.setStyleSheet(text_style("hint"))
+        self._queue_summary.hide()  # 仅作为 set_training_queue 的状态载体
         self._btn_clear_queue.setMaximumWidth(86)
         self._btn_clear_queue.setFixedHeight(28)
-        self._btn_clear_queue.setVisible(False)
-        queue_header.addWidget(self._queue_title)
-        queue_header.addWidget(self._queue_summary)
-        queue_header.addStretch()
-        queue_header.addWidget(self._btn_clear_queue)
-        queue_layout.addLayout(queue_header)
+        self._btn_clear_queue.setVisible(True)  # 常驻，无等待时禁用
 
+        self._active_progress_bar = None  # 当前运行任务卡片上的进度条
         self._queue_list = QListWidget()
         self._queue_list.setObjectName("trainingQueueList")
         self._queue_list.setFocusPolicy(Qt.NoFocus)
@@ -752,75 +837,129 @@ class TrainPanel(QWidget):
         self._queue_list.setSpacing(4)
         self._queue_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._queue_list.setToolTip("训练任务按此顺序串行执行")
-        queue_layout.addWidget(self._queue_list)
-        self._queue_container.setStyleSheet(
-            "QWidget#trainingQueueBox {"
-            f" background-color: {PALETTE['panel']};"
-            f" border: 1px solid {PALETTE['line']};"
-            " border-radius: 8px;"
-            "}"
-            "QWidget#trainingQueueBox QLabel {"
-            " background: transparent; border: none;"
-            "}"
-            "QListWidget#trainingQueueList {"
-            " background: transparent; border: none; padding: 0px;"
-            "}"
-            "QListWidget#trainingQueueList::item {"
-            f" background-color: {PALETTE['panel_alt']};"
-            f" color: {PALETTE['text']};"
-            " border: none; border-radius: 5px; padding: 5px 8px;"
-            "}"
+        # 无框、透明背景；每个任务由 setItemWidget 的 qitem 卡片绘制
+        self._queue_list.setStyleSheet(
+            "QListWidget#trainingQueueList { background: transparent; border: none; padding: 0px; }"
+            "QListWidget#trainingQueueList::item { background: transparent; border: none; margin: 0; }"
         )
-        self._queue_container.setVisible(False)
-        left_layout.addWidget(self._queue_container)
-
+        queue_layout.addWidget(self._queue_list)
+        self._queue_container.setVisible(True)
+        # 空态提示（无任务时队列分组仍常驻）
+        self._empty_queue_label = QLabel("暂无等待任务")
+        self._empty_queue_label.setAlignment(Qt.AlignCenter)
+        self._empty_queue_label.setStyleSheet(
+            f"color: {PALETTE['text_subtle']}; font-size: 11px; padding: 8px 0;"
+        )
+        queue_layout.addWidget(self._empty_queue_label)
         # Epoch progress bar
         self._epoch_progress = QProgressBar()
         self._epoch_progress.setRange(0, 100)
         self._epoch_progress.setValue(0)
         self._epoch_progress.setFormat("Epoch %v / %m")
         self._epoch_progress.setVisible(False)
-        left_layout.addWidget(self._epoch_progress)
 
-        # Resume and primary actions deliberately sit below the queue so they
-        # form the final, stable footer of the parameter sidebar.
+        # Resume（设计稿“其他”组）留在参数列底部
+        # "其他"组（设计稿）：single_cls / resume
+        other_group, other_form = self._create_param_group("其他", expanded=True)
+        other_form.addRow("single_cls:", self._single_cls_check)
         self._resume_check = QCheckBox("断点续训 (Resume)")
-        left_layout.addWidget(self._resume_check)
+        other_form.addRow("resume:", self._resume_check)
+        left_layout.addWidget(other_group)
 
-        btn_layout = QHBoxLayout()
-        btn_layout.setSpacing(8)
+        # 执行按钮（移至右侧检查器）
         self._btn_start = QPushButton(icon("start", PALETTE["ink"]), "开始训练")
         set_button_role(self._btn_start, "primary")
         self._btn_start.setToolTip("开始训练；训练进行中时将当前配置加入等待队列")
+        self._btn_start.setFixedHeight(36)
         self._btn_stop = QPushButton("停止训练")
         set_button_role(self._btn_stop, "danger")
         self._btn_stop.setEnabled(False)
         self._btn_stop.setToolTip("停止当前训练并清空所有等待任务")
+        self._btn_stop.setFixedHeight(34)
         self._btn_preview_aug = QPushButton("预览增强")
         set_button_role(self._btn_preview_aug, "secondary")
         self._btn_preview_aug.setToolTip("预览当前数据增强参数效果")
-        btn_layout.addWidget(self._btn_start, 2)
-        btn_layout.addWidget(self._btn_stop, 1)
-        btn_layout.addWidget(self._btn_preview_aug, 1)
-        left_layout.addLayout(btn_layout)
+        self._btn_preview_aug.setFixedHeight(32)
 
         scroll.setWidget(left)
 
-        # Right: curves + log
+        # Right: chart cards + log card（设计稿：卡片式 Loss/mAP 曲线 + 日志卡）
         right = QWidget()
         right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(10, 10, 10, 10)
-        right_layout.setSpacing(8)
+        right_layout.setContentsMargins(12, 12, 12, 12)
+        right_layout.setSpacing(12)
+
+        def _make_card() -> tuple[QFrame, QVBoxLayout]:
+            card = QFrame()
+            card.setObjectName("trainChartCard")
+            card.setStyleSheet(
+                "QFrame#trainChartCard {"
+                f" background-color: {PALETTE['panel']};"
+                f" border: 1px solid {PALETTE['line']};"
+                " border-top: 1px solid rgba(255,255,255,0.10);"
+                " border-radius: 12px;"
+                "}"
+            )
+            lay = QVBoxLayout(card)
+            lay.setContentsMargins(12, 8, 12, 8)
+            lay.setSpacing(4)
+            return card, lay
+
+        def _legend_qlabel(items: list[tuple[str, str]]) -> QLabel:
+            spans = "".join(
+                f'<span style="color:{PALETTE["text_subtle"]};font-size:10px;">'
+                f'<span style="color:{color};">▬</span>&nbsp;{label}</span>&nbsp;&nbsp;'
+                for label, color in items
+            )
+            lab = QLabel(spans or " ")
+            lab.setTextFormat(Qt.RichText)
+            lab.setStyleSheet("background: transparent;")
+            return lab
+
+        # ── Loss 卡片 ──
+        self._loss_card, loss_lay = _make_card()
+        loss_head = QHBoxLayout()
+        loss_head.setSpacing(8)
+        _lt = QLabel("Loss")
+        _lt.setStyleSheet(f"color: {PALETTE['text']}; font-size: 12.5px; font-weight: 700;")
+        _ls = QLabel("train / val")
+        _ls.setStyleSheet(f"color: {PALETTE['text_subtle']}; font-size: 10.5px;")
+        self._loss_value_label = QLabel("—")
+        self._loss_value_label.setStyleSheet(
+            f"color: {PALETTE['violet']}; font-family: {_MONO_FONT}; font-size: 17px; font-weight: 700;"
+        )
+        loss_head.addWidget(_lt)
+        loss_head.addWidget(_ls)
+        loss_head.addStretch()
+        loss_head.addWidget(self._loss_value_label)
+        loss_lay.addLayout(loss_head)
+
+        # ── mAP 卡片 ──
+        self._quality_card, quality_lay = _make_card()
+        q_head = QHBoxLayout()
+        q_head.setSpacing(8)
+        _qt = QLabel("mAP")
+        _qt.setStyleSheet(f"color: {PALETTE['text']}; font-size: 12.5px; font-weight: 700;")
+        _qs = QLabel("val")
+        _qs.setStyleSheet(f"color: {PALETTE['text_subtle']}; font-size: 10.5px;")
+        self._quality_value_label = QLabel("—")
+        self._quality_value_label.setStyleSheet(
+            f"color: {PALETTE['teal']}; font-family: {_MONO_FONT}; font-size: 17px; font-weight: 700;"
+        )
+        q_head.addWidget(_qt)
+        q_head.addWidget(_qs)
+        q_head.addStretch()
+        q_head.addWidget(self._quality_value_label)
+        quality_lay.addLayout(q_head)
 
         # Placeholder shown until pyqtgraph is available / training starts
         self._curve_label = QLabel("训练曲线 (训练开始后显示)")
         self._curve_label.setAlignment(Qt.AlignCenter)
         self._curve_label.setStyleSheet(
-            f"color: {PALETTE['text_subtle']}; font-size: 14px; min-height: 200px; "
-            f"border: 1px solid {PALETTE['line']}; border-radius: 6px;"
+            f"color: {PALETTE['text_subtle']}; font-size: 14px; min-height: 120px;"
         )
 
-        # Two stacked plots: Loss on top, task-specific quality on bottom.
+        # Two stacked chart cards: Loss on top, task-specific quality below.
         self._plot_widget = None
         self._loss_plot = None
         self._quality_plot = None
@@ -831,32 +970,40 @@ class TrainPanel(QWidget):
             import pyqtgraph as pg
             pg.setConfigOptions(background=PALETTE["bg"], foreground=PALETTE["text"])
 
-            self._loss_plot = pg.PlotWidget(title="Loss")
-            self._loss_plot.setLabel("bottom", "Epoch")
-            self._loss_plot.setLabel("left", "loss")
+            self._loss_plot = pg.PlotWidget(title="")
+            self._loss_plot.setLabel("bottom", "")
+            self._loss_plot.setLabel("left", "")
+            self._loss_plot.getAxis("bottom").setStyle(showValues=False)
+            self._loss_plot.getAxis("left").setStyle(showValues=False)
             self._loss_plot.addLegend(offset=(-10, 10))
             self._loss_plot.showGrid(x=True, y=True, alpha=0.2)
-            self._train_loss_curve = self._loss_plot.plot([], [], pen=pg.mkPen(PALETTE["danger"], width=2), name="Train Loss")
-            self._val_loss_curve = self._loss_plot.plot([], [], pen=pg.mkPen(PALETTE["primary"], width=2), name="Val Loss")
+            self._train_loss_curve = self._loss_plot.plot([], [], pen=pg.mkPen(PALETTE["primary"], width=2), name="train")
+            self._val_loss_curve = self._loss_plot.plot([], [], pen=pg.mkPen(PALETTE["teal"], width=2, style=Qt.DashLine), name="val")
+            loss_lay.addWidget(self._loss_plot, 1)
+            loss_lay.addWidget(_legend_qlabel([("train", PALETTE["primary"]), ("val", PALETTE["teal"])]))
 
-            self._quality_plot = pg.PlotWidget(title="mAP")
-            self._quality_plot.setLabel("bottom", "Epoch")
-            self._quality_plot.setLabel("left", "value")
+            self._quality_plot = pg.PlotWidget(title="")
+            self._quality_plot.setLabel("bottom", "")
+            self._quality_plot.setLabel("left", "")
+            self._quality_plot.getAxis("bottom").setStyle(showValues=False)
+            self._quality_plot.getAxis("left").setStyle(showValues=False)
             self._quality_plot.addLegend(offset=(-10, 10))
             self._quality_plot.showGrid(x=True, y=True, alpha=0.2)
             self._quality_plot.setYRange(0.0, 1.0, padding=0.05)
+            quality_lay.addWidget(self._quality_plot, 1)
+            self._quality_legend_label = _legend_qlabel([])
+            quality_lay.addWidget(self._quality_legend_label)
 
-            chart_splitter = QSplitter(Qt.Vertical)
-            chart_splitter.addWidget(self._loss_plot)
-            chart_splitter.addWidget(self._quality_plot)
-            chart_splitter.setStretchFactor(0, 1)
-            chart_splitter.setStretchFactor(1, 1)
-            chart_splitter.setSizes([220, 220])
-            self._plot_widget = chart_splitter
-            right_layout.addWidget(chart_splitter, 1)
+            self._plot_widget = QSplitter(Qt.Vertical)
+            self._plot_widget.addWidget(self._loss_card)
+            self._plot_widget.addWidget(self._quality_card)
+            self._plot_widget.setStretchFactor(0, 1)
+            self._plot_widget.setStretchFactor(1, 1)
+            self._plot_widget.setSizes([220, 220])
+            right_layout.addWidget(self._plot_widget, 1)
             self._curve_label.hide()
         except ImportError:
-            right_layout.addWidget(self._curve_label)
+            right_layout.addWidget(self._curve_label, 1)
 
         # Epoch data for curves
         self._epoch_data: list[dict] = []
@@ -865,24 +1012,125 @@ class TrainPanel(QWidget):
         # at the end of __init__ as well, but call once now so the plot has curves).
         self._rebuild_quality_curves(self._task_combo.currentText())
 
-        # Log
-        log_label = QLabel("训练日志")
-        log_label.setStyleSheet(text_style("section"))
-        right_layout.addWidget(log_label)
-
+        # ── 日志卡片（设计稿 logcard：标题栏 + 日志流） ──
+        self._log_card = QFrame()
+        self._log_card.setObjectName("trainLogCard")
+        self._log_card.setStyleSheet(
+            "QFrame#trainLogCard {"
+            f" background-color: {PALETTE['panel']};"
+            f" border: 1px solid {PALETTE['line']};"
+            " border-top: 1px solid rgba(255,255,255,0.10);"
+            " border-radius: 12px;"
+            "}"
+        )
+        log_lay = QVBoxLayout(self._log_card)
+        log_lay.setContentsMargins(12, 8, 12, 10)
+        log_lay.setSpacing(4)
+        log_head = QHBoxLayout()
+        log_head.setSpacing(10)
+        self._log_title = QLabel("训练日志")
+        self._log_title.setStyleSheet(
+            f"color: {PALETTE['text_subtle']}; font-size: 10px; font-weight: 700; letter-spacing: 0.14em;"
+        )
+        self._log_run_label = QLabel("")
+        self._log_run_label.setStyleSheet(
+            f"color: {PALETTE['primary']}; font-family: {_MONO_FONT}; font-size: 10.5px;"
+        )
+        log_src = QLabel("events.jsonl · 独立子进程 · 可取消")
+        log_src.setStyleSheet(f"color: {PALETTE['text_subtle']}; font-size: 10px;")
+        log_head.addWidget(self._log_title)
+        log_head.addWidget(self._log_run_label)
+        log_head.addStretch()
+        log_head.addWidget(log_src)
+        log_lay.addLayout(log_head)
         self._log_text = QPlainTextEdit()
         self._log_text.setReadOnly(True)
         self._log_text.setMaximumBlockCount(1000)
-        right_layout.addWidget(self._log_text)
+        log_lay.addWidget(self._log_text, 1)
+        right_layout.addWidget(self._log_card, 0)
 
-        # Splitter
-        splitter = QSplitter(Qt.Horizontal)
-        splitter.addWidget(scroll)
-        splitter.addWidget(right)
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([400, 820])
-        layout.addWidget(splitter)
+        # ── 右侧检查器：数据筛选 + 训练队列 + 执行（设计稿 insp-sec 三段） ──
+        inspector = QWidget()
+        inspector.setMinimumWidth(292)
+        inspector.setMaximumWidth(340)
+        insp_layout = QVBoxLayout(inspector)
+        insp_layout.setContentsMargins(12, 12, 12, 10)
+        insp_layout.setSpacing(0)
+
+        def _insp_title(text: str) -> QLabel:
+            lab = QLabel(text)
+            lab.setStyleSheet(
+                f"color: {PALETTE['text_subtle']}; font-size: 10.5px;"
+                " font-weight: 700; letter-spacing: 0.14em;"
+            )
+            return lab
+
+        def _insp_link(text: str, cb) -> QPushButton:
+            b = QPushButton(text)
+            b.setFlat(True)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setStyleSheet(
+                "QPushButton { border: none; background: transparent;"
+                f" color: {PALETTE['text_subtle']}; font-size: 11px; padding: 1px 4px; }}"
+                f"QPushButton:hover {{ color: {PALETTE['primary']}; }}"
+            )
+            b.clicked.connect(cb)
+            return b
+
+        def _insp_section(head_text: str, link: QPushButton | None = None) -> QWidget:
+            sec = QWidget()
+            sec.setStyleSheet(f"QWidget {{ border-bottom: 1px solid {PALETTE['line']}; }}")
+            lay = QVBoxLayout(sec)
+            lay.setContentsMargins(0, 12, 0, 12)
+            lay.setSpacing(8)
+            head = QHBoxLayout()
+            head.setSpacing(6)
+            head.addWidget(_insp_title(head_text))
+            head.addStretch()
+            if link is not None:
+                head.addWidget(link)
+            lay.addLayout(head)
+            return sec, lay
+
+        # 1) 数据筛选（标题行 + 重置链接 + 芯片/筛选内容）
+        fs_section, fs_lay = _insp_section(
+            "数据筛选", _insp_link("重置", lambda _=False: self._reset_filters()))
+        fs_lay.addLayout(filter_layout)
+        insp_layout.addWidget(fs_section)
+
+        # 2) 训练队列 · 串行（标题行 + 清空等待 + 卡片列表，无外层框）
+        q_section, q_lay = _insp_section("训练队列 · 串行", self._btn_clear_queue)
+        q_lay.addWidget(self._queue_container)
+        q_lay.addWidget(self._epoch_progress)
+        insp_layout.addWidget(q_section)
+
+        # 3) 执行（标题 + 按钮 + 说明）
+        e_section, e_lay = _insp_section("执行")
+        e_lay.addWidget(self._btn_start)
+        e_lay.addWidget(self._btn_stop)
+        e_lay.addWidget(self._btn_preview_aug)
+        exec_hint = QLabel(
+            "训练在独立子进程运行；单任务完成自动加载 best.pt，队列完成仅注册模型。"
+        )
+        exec_hint.setWordWrap(True)
+        exec_hint.setStyleSheet(text_style("hint"))
+        e_lay.addWidget(exec_hint)
+        insp_layout.addWidget(e_section)
+
+        insp_layout.addStretch(1)
+
+        # 设计稿 grid 布局：参数列(336) 固定 + 中区(自适应) + 检查器(292) 固定
+        scroll.setMinimumWidth(336)
+        scroll.setMaximumWidth(336)
+        inspector.setMinimumWidth(292)
+        inspector.setMaximumWidth(292)
+        main_row = QHBoxLayout()
+        main_row.setContentsMargins(0, 0, 0, 0)
+        main_row.setSpacing(0)
+        main_row.addWidget(scroll, 0)
+        main_row.addWidget(right, 1)
+        main_row.addWidget(inspector, 0)
+        layout.addLayout(main_row)
 
         # Disable scroll-wheel value changes on spinboxes and combos
         # to prevent accidental edits while scrolling the parameter list
@@ -957,11 +1205,47 @@ class TrainPanel(QWidget):
         self._model_size_combo.currentTextChanged.connect(lambda _text: self._on_official_model_changed())
         self._status_filter_combo.currentTextChanged.connect(lambda _text: self._emit_filter_changed())
         self._class_filter_combo.currentTextChanged.connect(lambda _text: self._emit_filter_changed())
-        self._data_folder_filter_combo.currentIndexChanged.connect(lambda _index: self._emit_filter_changed())
+        self._data_folder_filter_combo.currentIndexChanged.connect(
+            lambda _index: self._sync_version_chips())
+        self._data_folder_filter_combo.currentIndexChanged.connect(
+            lambda _index: self._emit_filter_changed())
         self._tag_filter_bar.filter_changed.connect(lambda _filt: self._emit_filter_changed())
+
+    def _on_version_chip(self, data: str) -> None:
+        idx = self._data_folder_filter_combo.findData(data)
+        if idx >= 0:
+            self._data_folder_filter_combo.setCurrentIndex(idx)
+
+    def _on_status_chip(self, text: str) -> None:
+        self._status_filter_combo.setCurrentText(text)
+
+    def _on_class_chip(self, text: str) -> None:
+        self._class_filter_combo.setCurrentText(text)
+
+    def _sync_version_chips(self) -> None:
+        rows = [(self._data_folder_filter_combo.itemText(i),
+                 self._data_folder_filter_combo.itemData(i) or "")
+                for i in range(self._data_folder_filter_combo.count())]
+        self._version_chips.set_options(rows, self._selected_version_chip_value())
+
+    def _selected_version_chip_value(self) -> str | None:
+        return self._version_chips.current_data() if hasattr(
+            self, "_version_chips") else None
 
     def _emit_filter_changed(self) -> None:
         self.filter_changed.emit(self._tag_filter_bar.current_filter())
+
+    def _reset_filters(self) -> None:
+        """重置数据筛选到默认（全部版本 / 已确认 / 所有类别 / 无 Tag）。"""
+        self._version_chips.set_current("")
+        self._on_version_chip("")
+        self._status_chips.set_current("已确认")
+        self._on_status_chip("已确认")
+        self._class_chips.set_current("")
+        self._on_class_chip("所有类别")
+        if hasattr(self, "_tag_filter_bar"):
+            self._tag_filter_bar.clear()
+        self._emit_filter_changed()
 
     def _on_freeze_default_toggled(self, use_default: bool) -> None:
         self._freeze_spin.setEnabled(not use_default)
@@ -995,17 +1279,25 @@ class TrainPanel(QWidget):
             return
 
         title, specs = _TASK_QUALITY_METRICS.get(task, _TASK_QUALITY_METRICS["detect"])
-        self._quality_plot.setTitle(title)
+        self._quality_plot.setTitle("")
         # Clear previous curves (both data and legend entries).
         self._quality_plot.clear()
         if hasattr(self._quality_plot, "plotItem") and self._quality_plot.plotItem.legend is not None:
             self._quality_plot.plotItem.legend.clear()
-        palette = [PALETTE["success"], PALETTE["warning"], PALETTE["violet"], PALETTE["teal"]]
+        palette = [PALETTE["teal"], PALETTE["primary"], PALETTE["warning"], PALETTE["violet"]]
         self._quality_curves = []
         for i, (label, keys) in enumerate(specs):
             pen = pg.mkPen(palette[i % len(palette)], width=2)
             curve = self._quality_plot.plot([], [], pen=pen, name=label)
             self._quality_curves.append((curve, keys))
+        # 卡片图例（设计稿 .lg）
+        if getattr(self, "_quality_legend_label", None) is not None:
+            spans = "".join(
+                f'<span style="color:{PALETTE["text_subtle"]};font-size:10px;">'
+                f'<span style="color:{palette[i % len(palette)]};">▬</span>&nbsp;{label}</span>&nbsp;&nbsp;'
+                for i, (label, _keys) in enumerate(specs)
+            )
+            self._quality_legend_label.setText(spans or " ")
 
     def _update_augmentation_groups_for_task(self, task: str) -> None:
         uses_detection_augmentations = task in {"detect", "segment", "pose", "obb"}
@@ -1350,6 +1642,13 @@ class TrainPanel(QWidget):
         self._epoch_progress.setRange(0, total_epochs)
         self._epoch_progress.setValue(0)
         self._epoch_progress.setVisible(True)
+        # 日志卡标题与卡片大数字（设计稿 logcard .lv / chart-card .big）
+        if getattr(self, "_log_run_label", None) is not None:
+            self._log_run_label.setText(display_name)
+        if getattr(self, "_loss_value_label", None) is not None:
+            self._loss_value_label.setText("—")
+        if getattr(self, "_quality_value_label", None) is not None:
+            self._quality_value_label.setText("—")
         # Reset curves so a previous run's data doesn't linger.
         if self._train_loss_curve is not None:
             self._train_loss_curve.setData([], [])
@@ -1537,7 +1836,9 @@ class TrainPanel(QWidget):
             label.setVisible(False)
             return
 
-        text = f"已选择 {selected_image_count} 张图片用于训练"
+        ratio = round(self._val_ratio_spin.value() * 100)
+        text = (f"命中 {selected_image_count} 张图片用于训练 · "
+                f"验证集 {ratio}% 分层抽样")
         if tag_counts:
             match = tag_counts.get("match", 0)
             dropped = (
@@ -1622,6 +1923,9 @@ class TrainPanel(QWidget):
         self._data_folder_filter_combo.setCurrentIndex(idx if idx >= 0 else 0)
         self._data_folder_filter_combo.blockSignals(False)
         self._pending_dataset_data_folder = None
+        # 显式同步版本芯片（blockSignals 阻断了 currentIndexChanged -> _sync_version_chips）
+        if hasattr(self, "_version_chips"):
+            self._sync_version_chips()
 
     def append_log(self, text: str) -> None:
         """Append text to training log."""
@@ -1669,6 +1973,29 @@ class TrainPanel(QWidget):
                 ys.append(last)
             curve.setData(epochs, ys)
 
+        # 卡片大数字（设计稿 chart-card .big）
+        if getattr(self, "_loss_value_label", None) is not None and train_losses:
+            self._loss_value_label.setText(f"{train_losses[-1]:.3f}")
+        if getattr(self, "_quality_value_label", None) is not None:
+            _, specs = _TASK_QUALITY_METRICS.get(
+                self._task_combo.currentText(), _TASK_QUALITY_METRICS["detect"]
+            )
+            primary_keys = specs[0][1] if specs else []
+            last_val = None
+            for d in reversed(self._epoch_data):
+                v = _pick_metric(d, primary_keys)
+                if v is not None:
+                    last_val = v
+                    break
+            if last_val is not None:
+                self._quality_value_label.setText(f"{last_val:.3f}")
+
+        # 队列卡片上运行中任务的进度条
+        if self._active_progress_bar is not None:
+            total = self._epoch_progress.maximum()
+            pct = int(epoch / total * 100) if total > 0 else 0
+            self._active_progress_bar.setValue(pct)
+
     def on_training_finished(self, metrics: dict) -> None:
         """Handle training completion."""
         self._btn_start.setEnabled(True)
@@ -1703,31 +2030,115 @@ class TrainPanel(QWidget):
         self._btn_stop.setEnabled(False)
         self._epoch_progress.setVisible(False)
 
+    def _make_queue_row(self, name: str, *, running: bool, detail: str, progress: int) -> QWidget:
+        """设计稿 qitem 卡片：状态点 + 名称 + 说明 + 进度条。"""
+        row = QWidget()
+        row.setObjectName("trainQueueItem")
+        if running:
+            border = _rgba(PALETTE["primary"], 0.5)
+            bg = (
+                f"qlineargradient(x1:0, y1:0, x2:0, y2:1, "
+                f"stop:0 {_rgba(PALETTE['primary'], 0.08)}, stop:1 rgba(0,0,0,0))"
+            )
+        else:
+            border = PALETTE["line"]
+            bg = PALETTE["panel"]
+        row.setStyleSheet(
+            "QWidget#trainQueueItem {"
+            f" background-color: {bg};"
+            f" border: 1px solid {border};"
+            " border-radius: 10px;"
+            "}"
+            "QWidget#trainQueueItem QLabel { background: transparent; border: none; }"
+        )
+        lay = QVBoxLayout(row)
+        lay.setContentsMargins(9, 7, 9, 7)
+        lay.setSpacing(5)
+
+        head = QHBoxLayout()
+        head.setSpacing(7)
+        dot = QLabel("●")
+        dot_color = PALETTE["primary"] if running else PALETTE["line_strong"]
+        dot.setStyleSheet(
+            f"color: {dot_color}; font-size: 9px; background: transparent; border: none;"
+        )
+        name_lbl = QLabel(name)
+        name_lbl.setStyleSheet(
+            f"color: {PALETTE['text']}; font-size: 12px; font-weight: 600;"
+            " background: transparent; border: none;"
+        )
+        head.addWidget(dot)
+        head.addWidget(name_lbl)
+        head.addStretch()
+        if detail:
+            det = QLabel(detail)
+            det.setStyleSheet(
+                f"color: {PALETTE['text_subtle']}; font-family: {_MONO_FONT}; font-size: 10px;"
+                " background: transparent; border: none;"
+            )
+            head.addWidget(det)
+        lay.addLayout(head)
+
+        if running:
+            bar = QProgressBar()
+            bar.setRange(0, 100)
+            bar.setValue(progress)
+            bar.setFixedHeight(4)
+            bar.setTextVisible(False)
+            bar.setStyleSheet(
+                "QProgressBar {"
+                f" background-color: {PALETTE['line']};"
+                " border: none; border-radius: 2px;"
+                "}"
+                "QProgressBar::chunk {"
+                f" background-color: {PALETTE['primary']};"
+                " border-radius: 2px;"
+                "}"
+            )
+            lay.addWidget(bar)
+            self._active_progress_bar = bar
+        else:
+            self._active_progress_bar = None
+        return row
+
     def set_training_queue(
         self,
         active_name: str | None,
         waiting_names: list[str],
     ) -> None:
-        """Render the active job and FIFO waiting list."""
+        """Render the active job and FIFO waiting list as qitem-style cards."""
         self._queue_list.clear()
+        self._active_progress_bar = None
         if active_name:
-            self._queue_list.addItem(f"●  训练中    {active_name}")
+            item = QListWidgetItem()
+            row = self._make_queue_row(active_name, running=True, detail="训练中", progress=0)
+            item.setSizeHint(row.sizeHint())
+            self._queue_list.addItem(item)
+            self._queue_list.setItemWidget(item, row)
         for index, name in enumerate(waiting_names, start=1):
-            self._queue_list.addItem(f"○  等待 {index}    {name}")
+            item = QListWidgetItem()
+            row = self._make_queue_row(name, running=False, detail=f"等待 {index}", progress=0)
+            item.setSizeHint(row.sizeHint())
+            self._queue_list.addItem(item)
+            self._queue_list.setItemWidget(item, row)
         task_count = (1 if active_name else 0) + len(waiting_names)
         summary_parts = [f"{task_count} 个任务"]
         if waiting_names:
             summary_parts.append(f"{len(waiting_names)} 个等待")
         self._queue_summary.setText(" · ".join(summary_parts))
+        # 空态：无任务时显示占位，队列分组常驻（设计稿）
+        if getattr(self, "_empty_queue_label", None) is not None:
+            self._empty_queue_label.setVisible(task_count == 0)
+            self._queue_list.setVisible(task_count > 0)
         visible_rows = min(task_count, 3)
-        self._queue_list.setFixedHeight(visible_rows * 34)
-        self._queue_container.setVisible(task_count > 0)
+        self._queue_list.setFixedHeight(visible_rows * 52)
+        self._queue_container.setVisible(True)  # 常驻显示
         self._btn_start.setEnabled(True)
-        self._btn_start.setText("加入队列" if active_name else "开始训练")
+        self._btn_start.setText("加入队列（训练中 → 排队）" if active_name else "开始训练")
         self._btn_stop.setEnabled(bool(active_name))
-        self._btn_stop.setText("停止全部" if waiting_names else "停止训练")
+        self._btn_stop.setText("停止当前训练（并清空等待）" if waiting_names else "停止当前训练")
         self._btn_clear_queue.setEnabled(bool(waiting_names))
-        self._btn_clear_queue.setVisible(bool(waiting_names))
+        self._btn_clear_queue.setVisible(True)  # 常驻，无等待时禁用
 
     def on_queue_submission_error(self, error_msg: str) -> None:
         """Report an enqueue/validation failure without disturbing a running job."""

@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>方案 C · 沉浸画布 — AutoLabel Dock 重设计</title>
+<style>
+/* ============ 方案 C「沉浸画布 Focus Canvas」 ============
+   结构主张：消灭常驻面板——画布全出血即界面；
+   工具/信息全部浮层化（毛玻璃），文件列表为左缘抽屉 + 底部胶片条
+   调色板：石墨近黑 · 暖白 · 氖青 accent（单色系 + 单强调）          */
+:root{
+  --bg:#07090C;
+  --glass:rgba(16,20,26,.78);
+  --glass-hi:rgba(255,255,255,.08);
+  --line:rgba(255,255,255,.09);
+  --line-2:rgba(255,255,255,.18);
+  --text:#F2F4F1;
+  --text-2:#B9C1BE;
+  --text-3:#6E7876;
+  --accent:#35E0C8;      /* 氖青 */
+  --accent-dim:rgba(53,224,200,.14);
+  --ok:#35E0C8;
+  --warn:#E8C35A;
+  --bad:#F07167;
+  --mono:"SF Mono",ui-monospace,Menlo,monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{background:var(--bg);color:var(--text);overflow:hidden;
+  font-family:-apple-system,"PingFang SC","Noto Sans SC","Microsoft YaHei",sans-serif;font-size:13px;
+  -webkit-font-smoothing:antialiased}
+.app{position:relative;height:100vh}
+
+/* ═══ 全出血画布 ═══ */
+canvas-bg,.full-bleed{position:absolute;inset:0}
+.full-bleed{background:
+  radial-gradient(1200px 800px at 50% 42%, #171C22 0%, #0B0E12 55%, var(--bg) 100%)}
+.full-bleed svg.scene{position:absolute;inset:0;width:100%;height:100%}
+/* 呼吸光晕（签名细节）：选中标注时画布四缘的极淡响应 */
+.vignette{position:absolute;inset:0;pointer-events:none;
+  box-shadow:inset 0 0 140px rgba(53,224,200,.05), inset 0 0 40px rgba(0,0,0,.5)}
+
+/* ═══ 极细顶栏 ═══ */
+.topline{position:absolute;top:0;left:0;right:0;height:42px;display:flex;align-items:center;gap:12px;
+  padding:0 14px;background:linear-gradient(180deg,rgba(7,9,12,.85),transparent);z-index:40}
+.back{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-2);cursor:pointer;
+  padding:4px 9px 4px 6px;border-radius:7px}
+.back:hover{background:var(--glass-hi);color:var(--text)}
+.back svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2}
+.projname{font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:8px}
+.projname .tt{font-size:9.5px;font-weight:700;letter-spacing:.1em;color:var(--accent);
+  border:1px solid rgba(53,224,200,.35);border-radius:4px;padding:1px 6px}
+.imgno{margin-left:auto;font-family:var(--mono);font-size:11.5px;color:var(--text-2)}
+.imgno b{color:var(--text);font-size:13px}
+.zoomc{font-family:var(--mono);font-size:11px;color:var(--text-2);border:1px solid var(--line);
+  border-radius:6px;padding:3px 9px;cursor:pointer}
+.zoomc:hover{border-color:var(--line-2);color:var(--text)}
+
+/* ═══ 浮动工具坞（左，毛玻璃） ═══ */
+.dock{position:absolute;left:14px;top:50%;transform:translateY(-50%);width:48px;
+  background:var(--glass);border:1px solid var(--line);border-radius:13px;padding:6px 5px;
+  display:flex;flex-direction:column;align-items:center;gap:2px;backdrop-filter:blur(14px);z-index:40;
+  box-shadow:0 12px 40px rgba(0,0,0,.5)}
+.dock .dt{width:38px;height:38px;border-radius:9px;display:flex;align-items:center;justify-content:center;
+  color:var(--text-3);cursor:pointer;position:relative;border:1px solid transparent}
+.dock .dt:hover{color:var(--text);background:var(--glass-hi)}
+.dock .dt.on{color:var(--accent);background:var(--accent-dim);border-color:rgba(53,224,200,.3)}
+.dock .dt svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.dock .dt kbd{position:absolute;right:2px;bottom:1px;font-family:var(--mono);font-size:8px;color:var(--text-3)}
+.dock .div{width:22px;height:1px;background:var(--line);margin:4px 0}
+.dock .tip{position:absolute;left:56px;top:50%;transform:translateY(-50%);background:var(--glass);
+  border:1px solid var(--line-2);backdrop-filter:blur(10px);padding:4px 9px;border-radius:7px;font-size:11.5px;
+  white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .12s;z-index:60}
+.dock .dt:hover .tip{opacity:1}
+
+/* ═══ 浮动模式胶囊（顶中） ═══ */
+.mode{position:absolute;top:52px;left:50%;transform:translateX(-50%);display:flex;gap:2px;
+  background:var(--glass);border:1px solid var(--line);border-radius:99px;padding:3px;backdrop-filter:blur(14px);z-index:40}
+.mode span{padding:5px 14px;border-radius:99px;font-size:12px;color:var(--text-2);cursor:pointer}
+.mode span:hover{color:var(--text)}
+.mode span.on{background:var(--accent);color:#04211C;font-weight:600}
+.mode .d{width:1px;background:var(--line);margin:4px 2px}
+
+/* ═══ 左缘抽屉：文件列表（hover 呼出） ═══ */
+.edge-l{position:absolute;left:0;top:42px;bottom:0;width:26px;z-index:45}
+.drawer{position:absolute;left:0;top:42px;bottom:64px;width:252px;transform:translateX(-244px);
+  transition:transform .22s cubic-bezier(.2,.8,.2,1);z-index:44;
+  background:var(--glass);border-right:1px solid var(--line);backdrop-filter:blur(16px);
+  display:flex;flex-direction:column}
+.edge-l:hover ~ .drawer,.drawer:hover{transform:translateX(0)}
+.drawer .dh{padding:12px 14px 8px;font-size:10px;font-weight:700;letter-spacing:.14em;color:var(--text-3);
+  display:flex;align-items:center;gap:8px}
+.drawer .dh .n{margin-left:auto;font-family:var(--mono);font-size:10px}
+.verline{display:flex;gap:4px;padding:0 12px 10px}
+.vchip{font-size:10.5px;padding:3px 9px;border-radius:6px;border:1px solid var(--line);color:var(--text-3);cursor:pointer}
+.vchip.on{color:var(--accent);border-color:rgba(53,224,200,.4);background:var(--accent-dim)}
+.flist{flex:1;overflow-y:auto;padding:0 8px 10px}
+.fi{display:flex;align-items:center;gap:9px;padding:6px 8px;border-radius:8px;cursor:pointer}
+.fi:hover{background:var(--glass-hi)}
+.fi.on{background:var(--accent-dim)}
+.fi .th{width:34px;height:34px;border-radius:7px;background:linear-gradient(135deg,#232A31,#161B20);
+  position:relative;flex-shrink:0;overflow:hidden}
+.fi .th svg{position:absolute;inset:0;width:100%;height:100%}
+.fi .fn{font-size:11.5px;color:var(--text-2);font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fi.on .fn{color:var(--text)}
+.fi .st{margin-left:auto;width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.fi .st.ok{background:var(--accent)}.fi .st.wn{background:var(--warn)}.fi .st.ns{background:#333C3B}
+.fi .cf{margin-left:auto;font-size:9.5px;color:var(--text-3);font-family:var(--mono)}
+
+/* ═══ 右缘：选中标注卡片 ═══ */
+.selcard{position:absolute;right:14px;top:96px;width:224px;background:var(--glass);border:1px solid var(--line);
+  border-radius:13px;padding:13px 14px;backdrop-filter:blur(16px);z-index:40;box-shadow:0 12px 40px rgba(0,0,0,.5)}
+.selcard .sh{font-size:10px;font-weight:700;letter-spacing:.14em;color:var(--text-3);margin-bottom:9px;
+  display:flex;justify-content:space-between}
+.selcard .sh .x{cursor:pointer;color:var(--text-3)}
+.selcard .big{display:flex;align-items:center;gap:9px;margin-bottom:10px}
+.selcard .sw{width:13px;height:13px;border-radius:4px;background:var(--accent)}
+.selcard .cn{font-size:14px;font-weight:600}
+.selcard .kv{display:grid;grid-template-columns:64px 1fr;row-gap:5px;font-size:11.5px;margin-bottom:11px}
+.selcard .kv .k{color:var(--text-3)}
+.selcard .kv .v{font-family:var(--mono);font-size:11px}
+.sel-actions{display:flex;gap:7px}
+.sa{flex:1;height:30px;border-radius:8px;border:1px solid var(--line-2);background:transparent;color:var(--text);
+  font-size:12px;cursor:pointer}
+.sa:hover{border-color:var(--accent);color:var(--accent)}
+.sa.del:hover{border-color:var(--bad);color:var(--bad)}
+
+/* ═══ 底部胶片条 ═══ */
+.film{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:7px;
+  background:var(--glass);border:1px solid var(--line);border-radius:15px;padding:8px 10px;backdrop-filter:blur(16px);
+  z-index:40;box-shadow:0 12px 40px rgba(0,0,0,.5)}
+.fcell{width:46px;height:46px;border-radius:9px;border:1.6px solid transparent;position:relative;cursor:pointer;
+  background:linear-gradient(135deg,#20262C,#141920);overflow:hidden;flex-shrink:0}
+.fcell:hover{border-color:var(--line-2)}
+.fcell.on{border-color:var(--accent)}
+.fcell svg{position:absolute;inset:0;width:100%;height:100%}
+.fcell .st{position:absolute;left:3px;top:3px;width:6px;height:6px;border-radius:50%}
+.fcell .st.ok{background:var(--accent)}.fcell .st.wn{background:var(--warn)}.fcell .st.ns{background:#39423F}
+.fnav{width:28px;height:46px;border-radius:9px;display:flex;align-items:center;justify-content:center;color:var(--text-3);cursor:pointer}
+.fnav:hover{color:var(--text);background:var(--glass-hi)}
+.fcnt{font-family:var(--mono);font-size:10px;color:var(--text-3);padding:0 4px}
+
+/* ═══ 右下完成度 HUD ═══ */
+.hud{position:absolute;right:14px;bottom:14px;display:flex;align-items:center;gap:11px;
+  background:var(--glass);border:1px solid var(--line);border-radius:13px;padding:10px 14px 10px 10px;
+  backdrop-filter:blur(16px);z-index:40;cursor:pointer}
+.hud:hover{border-color:var(--line-2)}
+.hud svg{display:block}
+.hud .hn{font-size:11px;color:var(--text-2);line-height:1.5}
+.hud .hn b{color:var(--text);font-family:var(--mono);font-size:13px;display:block}
+
+/* ═══ 快捷键幽灵提示（左下，随模式淡显） ═══ */
+.keys{position:absolute;left:80px;bottom:20px;z-index:35;display:flex;gap:14px;pointer-events:none;
+  font-size:10.5px;color:var(--text-3)}
+.keys kbd{font-family:var(--mono);color:var(--text-2);border:1px solid var(--line);border-radius:4px;
+  padding:1px 5px;margin-right:5px;font-size:9.5px}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ═══ 全出血画布 ═══ -->
+  <div class="full-bleed">
+    <svg class="scene" viewBox="0 0 1440 900" preserveAspectRatio="xMidYMid slice">
+      <defs>
+        <radialGradient id="plate3" cx="50%" cy="42%" r="75%">
+          <stop offset="0%" stop-color="#333A43"/><stop offset="52%" stop-color="#20252D"/><stop offset="100%" stop-color="#101419"/>
+        </radialGradient>
+        <linearGradient id="m3" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#98A2B2"/><stop offset="42%" stop-color="#5E6875"/><stop offset="100%" stop-color="#3A424E"/>
+        </linearGradient>
+        <radialGradient id="spot" cx="50%" cy="30%" r="60%">
+          <stop offset="0%" stop-color="rgba(255,255,255,.10)"/><stop offset="100%" stop-color="rgba(255,255,255,0)"/>
+        </radialGradient>
+      </defs>
+      <rect width="1440" height="900" fill="#0A0D11"/>
+      <!-- 台面 -->
+      <ellipse cx="720" cy="470" rx="560" ry="330" fill="url(#plate3)"/>
+      <ellipse cx="720" cy="380" rx="480" ry="240" fill="url(#spot)"/>
+      <!-- 主胶环（大） -->
+      <circle cx="640" cy="430" r="265" fill="url(#m3)"/>
+      <circle cx="640" cy="430" r="184" fill="#0D1116"/>
+      <circle cx="640" cy="430" r="226" fill="none" stroke="#20262E" stroke-width="26" opacity=".55"/>
+      <circle cx="640" cy="430" r="265" fill="none" stroke="#B8C2D0" stroke-width="1.4" opacity=".35"/>
+      <!-- 高光弧 -->
+      <path d="M 430 260 A 265 265 0 0 1 780 210" fill="none" stroke="#E9EDF2" stroke-width="3" opacity=".18" stroke-linecap="round"/>
+      <!-- 次环 -->
+      <circle cx="1120" cy="620" r="105" fill="#4A525E"/>
+      <circle cx="1120" cy="620" r="56" fill="#0D1116"/>
+      <!-- 缺陷 -->
+      <path d="M835 218 l38 -20 6 36 -34 15 z" fill="#F07167" opacity=".8"/>
+      <text x="888" y="228" fill="#F5A79F" font-size="14" font-family="SF Mono,monospace" opacity=".85">scratch 0.31</text>
+
+      <!-- 氖青多边形标注 -->
+      <polygon points="640,152 796,196 906,316 932,452 864,596 728,672 552,668 424,578 362,440 390,300 492,192"
+        fill="rgba(53,224,200,.05)" stroke="#35E0C8" stroke-width="2.6"/>
+      <g fill="#07090C" stroke="#35E0C8" stroke-width="2.2">
+        <rect x="633" y="145" width="14" height="14"/><rect x="789" y="189" width="14" height="14"/>
+        <rect x="899" y="309" width="14" height="14"/><rect x="925" y="445" width="14" height="14"/>
+        <rect x="857" y="589" width="14" height="14"/><rect x="721" y="665" width="14" height="14"/>
+        <rect x="545" y="661" width="14" height="14"/><rect x="417" y="571" width="14" height="14"/>
+      </g>
+      <g>
+        <rect x="540" y="96" width="212" height="30" rx="8" fill="rgba(9,12,15,.92)" stroke="rgba(53,224,200,.5)"/>
+        <text x="558" y="117" fill="#35E0C8" font-size="14.5" font-weight="700">item · 胶环</text>
+        <text x="662" y="117" fill="#B9C1BE" font-size="12.5" font-family="SF Mono,monospace">0.96 · 41,876px²</text>
+      </g>
+      <!-- 已确认次环：单像素细框 -->
+      <rect x="1012" y="512" width="216" height="216" fill="none" stroke="#35E0C8" stroke-width="1.2" opacity=".4"/>
+      <text x="1018" y="504" fill="#35E0C8" font-size="12" font-family="SF Mono,monospace" opacity=".6">✓ 0.91</text>
+      <!-- 十字光标 -->
+      <g stroke="#F2F4F1" stroke-width="1" opacity=".4">
+        <line x1="760" y1="0" x2="760" y2="900" stroke-dasharray="5 6"/><line x1="0" y1="470" x2="1440" y2="470" stroke-dasharray="5 6"/>
+      </g>
+      <circle cx="760" cy="470" r="12" fill="none" stroke="#F2F4F1" stroke-width="1.4" opacity=".75"/>
+    </svg>
+    <div class="vignette"></div>
+  </div>
+
+  <!-- ═══ 极细顶栏 ═══ -->
+  <div class="topline">
+    <span class="back"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>项目</span>
+    <span class="projname">胶环密封检测 <span class="tt">SEGMENT</span></span>
+    <span class="imgno"><b>0231</b> / 1,284 · v1-产线A</span>
+    <span class="zoomc">82%</span>
+    <span class="zoomc" style="border-color:rgba(53,224,200,.35);color:var(--accent)">待确认</span>
+  </div>
+
+  <!-- ═══ 浮动工具坞 ═══ -->
+  <div class="dock">
+    <span class="dt on"><svg viewBox="0 0 24 24"><path d="M4 4h7M4 4v7M20 20h-7M20 20v-7M4 4l6 6M20 20l-6-6"/></svg><kbd>V</kbd><span class="tip">移动 / 选择 · V</span></span>
+    <span class="dt"><svg viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="1"/></svg><kbd>W</kbd><span class="tip">矩形框 · W</span></span>
+    <span class="dt"><svg viewBox="0 0 24 24"><path d="M12 3l8 5-3 9H7L4 8l8-5z"/></svg><kbd>P</kbd><span class="tip">多边形 · P</span></span>
+    <span class="dt"><svg viewBox="0 0 24 24"><rect x="7" y="4" width="10" height="16" rx="1" transform="rotate(25 12 12)"/></svg><kbd>O</kbd><span class="tip">旋转框 · O</span></span>
+    <span class="dt"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="2.2"/><circle cx="6" cy="17" r="2.2"/><circle cx="18" cy="17" r="2.2"/><path d="M12 10l-5 5M12 10l5 5"/></svg><kbd>K</kbd><span class="tip">关键点 · K</span></span>
+    <div class="div"></div>
+    <span class="dt"><svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 0 1 14-5M20 12a8 8 0 0 1-14 5"/><path d="M18 3v4h-4M6 21v-4h4"/></svg><span class="tip">撤销 / 重做</span></span>
+    <span class="dt"><svg viewBox="0 0 24 24"><path d="M12 3l1.9 5.6L20 10l-5 3.9L16.5 20 12 16.5 7.5 20 9 13.9 4 10l6.1-1.4L12 3z"/></svg><span class="tip">AI 预标注 · ⇧A</span></span>
+    <div class="div"></div>
+    <span class="dt"><svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg><kbd>⏎</kbd><span class="tip">确认本图 · ⌘↩</span></span>
+  </div>
+
+  <!-- ═══ 模式胶囊 ═══ -->
+  <div class="mode">
+    <span>全部 1,284</span><span class="on">待确认 231</span><span>未标注 86</span>
+    <span class="d"></span>
+    <span>⌘K</span>
+  </div>
+
+  <!-- 左缘呼出热区 -->
+  <div class="edge-l"></div>
+
+  <!-- ═══ 左缘抽屉：文件列表 ═══ -->
+  <aside class="drawer">
+    <div class="dh">文件列表 · 当前筛选 <span class="n">231 张</span></div>
+    <div class="verline">
+      <span class="vchip on">全部</span><span class="vchip">v1-产线A</span><span class="vchip">v2-产线B</span>
+    </div>
+    <div class="flist">
+      <div class="fi"><span class="th"><svg viewBox="0 0 34 34"><circle cx="17" cy="17" r="11" fill="#3E4655"/><circle cx="17" cy="17" r="6" fill="#141821"/></svg></span><span class="fn">IMG_0435.png</span><span class="st ok"></span></div>
+      <div class="fi"><span class="th"><svg viewBox="0 0 34 34"><circle cx="15" cy="17" r="10" fill="#525B6B"/><circle cx="15" cy="17" r="5" fill="#141821"/></svg></span><span class="fn">IMG_0436.png</span><span class="st ok"></span></div>
+      <div class="fi on"><span class="th"><svg viewBox="0 0 34 34"><circle cx="18" cy="16" r="11" fill="#525B6B"/><circle cx="18" cy="16" r="6" fill="#141821"/><circle cx="29" cy="25" r="5" fill="#3E4655"/></svg></span><span class="fn">IMG_0437.png</span><span class="st wn"></span></div>
+      <div class="fi"><span class="th"><svg viewBox="0 0 34 34"><circle cx="17" cy="18" r="10" fill="#454D5C"/><circle cx="17" cy="18" r="5" fill="#141821"/></svg></span><span class="fn">IMG_0438.png</span><span class="st wn"></span></div>
+      <div class="fi"><span class="th"><svg viewBox="0 0 34 34"><circle cx="16" cy="16" r="11" fill="#3E4655"/><circle cx="16" cy="16" r="6" fill="#141821"/></svg></span><span class="fn">IMG_0439.png</span><span class="st ns"></span></div>
+      <div class="fi"><span class="th"><svg viewBox="0 0 34 34"><circle cx="17" cy="17" r="10" fill="#525B6B"/><circle cx="17" cy="17" r="5" fill="#141821"/></svg></span><span class="fn">IMG_0440.png</span><span class="st wn"></span></div>
+      <div class="fi"><span class="th"><svg viewBox="0 0 34 34"><circle cx="17" cy="15" r="11" fill="#454D5C"/><circle cx="17" cy="15" r="6" fill="#141821"/></svg></span><span class="fn">IMG_0441.png</span><span class="st ns"></span></div>
+    </div>
+  </aside>
+
+  <!-- ═══ 右缘选中卡片 ═══ -->
+  <div class="selcard">
+    <div class="sh">选中标注 <span class="x">✕</span></div>
+    <div class="big"><span class="sw"></span><span class="cn">item · 胶环</span></div>
+    <div class="kv">
+      <span class="k">来源</span><span class="v">ring-seg-v3 预标注</span>
+      <span class="k">置信度</span><span class="v">0.96</span>
+      <span class="k">面积</span><span class="v">41,876 px²</span>
+      <span class="k">形状</span><span class="v">多边形 · 11 点</span>
+      <span class="k">状态</span><span class="v" style="color:var(--warn)">待确认</span>
+    </div>
+    <div class="sel-actions">
+      <button class="sa">确认 ⏎</button>
+      <button class="sa del">删除 ⌫</button>
+    </div>
+  </div>
+
+  <!-- ═══ 底部胶片条 ═══ -->
+  <div class="film">
+    <span class="fnav"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 18l-6-6 6-6"/></svg></span>
+    <div class="fcell"><svg viewBox="0 0 46 46"><circle cx="23" cy="23" r="14" fill="#3E4655"/><circle cx="23" cy="23" r="8" fill="#141821"/></svg><span class="st ok"></span></div>
+    <div class="fcell"><svg viewBox="0 0 46 46"><circle cx="21" cy="24" r="13" fill="#525B6B"/><circle cx="21" cy="24" r="7" fill="#141821"/></svg><span class="st ok"></span></div>
+    <div class="fcell on"><svg viewBox="0 0 46 46"><circle cx="24" cy="22" r="14" fill="#525B6B"/><circle cx="24" cy="22" r="8" fill="#141821"/><circle cx="37" cy="34" r="6" fill="#3E4655"/></svg><span class="st wn"></span></div>
+    <div class="fcell"><svg viewBox="0 0 46 46"><circle cx="23" cy="25" r="13" fill="#454D5C"/><circle cx="23" cy="25" r="7" fill="#141821"/></svg><span class="st wn"></span></div>
+    <div class="fcell"><svg viewBox="0 0 46 46"><circle cx="22" cy="22" r="14" fill="#3E4655"/><circle cx="22" cy="22" r="8" fill="#141821"/></svg><span class="st ns"></span></div>
+    <div class="fcell"><svg viewBox="0 0 46 46"><circle cx="24" cy="24" r="13" fill="#525B6B"/><circle cx="24" cy="24" r="7" fill="#141821"/></svg><span class="st wn"></span></div>
+    <div class="fcell"><svg viewBox="0 0 46 46"><circle cx="23" cy="21" r="14" fill="#454D5C"/><circle cx="23" cy="21" r="8" fill="#141821"/></svg><span class="st ns"></span></div>
+    <span class="fnav"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 18l6-6-6-6"/></svg></span>
+    <span class="fcnt">0231 · 1024²</span>
+  </div>
+
+  <!-- ═══ 右下 HUD ═══ -->
+  <div class="hud">
+    <svg width="44" height="44" viewBox="0 0 44 44">
+      <circle cx="22" cy="22" r="18" fill="none" stroke="rgba(255,255,255,.1)" stroke-width="4"/>
+      <circle cx="22" cy="22" r="18" fill="none" stroke="#35E0C8" stroke-width="4" stroke-linecap="round"
+        stroke-dasharray="84.8 113.1" transform="rotate(-90 22 22)"/>
+      <text x="22" y="26" text-anchor="middle" font-size="10.5" fill="#F2F4F1" font-family="SF Mono,monospace">75%</text>
+    </svg>
+    <div class="hn"><b>967 / 1,284</b>已确认 · 训练就绪</div>
+  </div>
+
+  <!-- 快捷键幽灵提示 -->
+  <div class="keys">
+    <span><kbd>A</kbd>/<kbd>D</kbd>切图</span>
+    <span><kbd>⌘↩</kbd>确认整图</span>
+    <span><kbd>⇧A</kbd>AI 预标注</span>
+    <span><kbd>⌘L</kbd>文件列表</span>
+  </div>
+</div>
+
+<script>
+// 工具坞激活
+document.querySelectorAll('.dock .dt').forEach(d=>d.addEventListener('click',()=>{
+  if(!d.querySelector('kbd'))return;
+  document.querySelectorAll('.dock .dt').forEach(x=>x.classList.remove('on'));d.classList.add('on');
+}));
+// 模式胶囊
+document.querySelectorAll('.mode span').forEach(s=>{
+  if(s.classList.contains('on')||s.textContent.includes('⌘'))return;
+  s.addEventListener('click',()=>{
+    const arr=[...document.querySelectorAll('.mode span')].filter(x=>!x.classList.contains('d')&&x.textContent!=='⌘K');
+    arr.forEach(x=>x.classList.remove('on'));s.classList.add('on');
+  });
+});
+// 胶片条选中
+document.querySelectorAll('.fcell').forEach(f=>f.addEventListener('click',()=>{
+  document.querySelectorAll('.fcell').forEach(x=>x.classList.remove('on'));f.classList.add('on');
+}));
+</script>
+</body>
+</html>

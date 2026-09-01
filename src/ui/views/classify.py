@@ -62,7 +62,7 @@ class _ThumbnailVisual:
 def _compute_visual_state(
     ia: ImageAnnotation,
     class_colors: dict[str, str],
-    default_color: str = "#6c7086",
+    default_color: str = "#5E7A9F",
 ) -> _ThumbnailVisual:
     """Compute thumbnail visual state from ImageAnnotation. Pure function."""
     if ia.image_tags:

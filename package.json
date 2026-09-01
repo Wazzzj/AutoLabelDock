@@ -1,0 +1,23 @@
+{
+  "name": "autolabeldock",
+  "version": "1.0.0",
+  "description": "> 标一点、训一版、再自动标：面向 YOLO 训练闭环的桌面端图像标注工具。",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://gitcode.com/Edison_Qina/AutoLabelDock.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "playwright": "^1.62.1"
+  }
+}

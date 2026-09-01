@@ -34,18 +34,16 @@ def test_escape_closes_keypoint_picker_while_input_has_focus():
     picker.close()
 
 
-def test_annotation_panel_clear_all_button_tracks_content_and_emits():
+def test_annotation_panel_clear_all_signal_emits():
+    """清空入口已移至“更多”菜单；面板信号仍可触发（含确认流程上游）。"""
     panel = AnnotationPanel()
     emitted = []
     panel.clear_all_annotations_requested.connect(lambda: emitted.append(True))
-    assert not panel._clear_all_btn.isEnabled()
 
     panel.set_annotations([
         Annotation(class_name="person", class_id=0, bbox=(0.5, 0.5, 0.4, 0.4))
     ])
-    assert panel._clear_all_btn.isEnabled()
-
-    QTest.mouseClick(panel._clear_all_btn, Qt.LeftButton)
+    panel.clear_all_annotations_requested.emit()
     assert emitted == [True]
     panel.close()
 

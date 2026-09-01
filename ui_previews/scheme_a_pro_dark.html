@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>方案 A · Pro Dark 数据看板 — AutoLabel Dock 原型</title>
+<style>
+  /* ===== 令牌（对应 UI_SCHEMES.md 方案 A）===== */
+  :root {
+    --bg-deep:#020203; --bg-base:#0B0F1A; --bg-elevated:#111827; --bg-raised:#1B2436;
+    --surface:#0F1420;
+    --border:rgba(148,163,184,.14); --border-strong:rgba(148,163,184,.28);
+    --text:#EDEDEF; --text-muted:#8A8F98; --text-subtle:#5B6472;
+    --accent:#5E6AD2; --accent-soft:rgba(94,106,210,.16);
+    --teal:#2DD4BF; --amber:#F59E0B; --green:#34D399; --red:#F87171;
+    --focus-ring:#8B93E8;
+    --mono:'JetBrains Mono','SF Mono',Consolas,monospace;
+    --sans:'Inter','Segoe UI','PingFang SC','Noto Sans CJK SC',system-ui,sans-serif;
+    --r:8px;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:var(--sans); font-size:12px; color:var(--text); background:var(--bg-deep); }
+  ::-webkit-scrollbar { width:9px; height:9px; }
+  ::-webkit-scrollbar-thumb { background:var(--border-strong); border-radius:5px; }
+  ::-webkit-scrollbar-track { background:transparent; }
+
+  /* ===== 应用骨架 ===== */
+  .app { display:flex; flex-direction:column; height:100vh; min-width:1024px; }
+  header { display:flex; align-items:center; gap:14px; height:44px; padding:0 14px;
+    background:var(--bg-elevated); border-bottom:1px solid var(--border); }
+  .brand { display:flex; align-items:center; gap:8px; font-weight:700; font-size:14px; }
+  .brand .dot { width:10px; height:10px; border-radius:3px;
+    background:linear-gradient(135deg,var(--accent),var(--teal)); box-shadow:0 0 8px var(--accent-soft); }
+  .proj { color:var(--text-muted); } .proj b { color:var(--text); font-weight:600; }
+  .spacer { flex:1; }
+  .chip { padding:2px 8px; border-radius:20px; font-size:11px; font-weight:600; }
+  .chip.teal { color:var(--teal); background:rgba(45,212,191,.12); border:1px solid rgba(45,212,191,.3); }
+
+  nav.tabs { display:flex; gap:2px; height:38px; padding:0 10px; background:var(--bg-base);
+    border-bottom:1px solid var(--border); align-items:center; }
+  nav.tabs button { all:unset; cursor:pointer; padding:6px 14px; border-radius:6px;
+    color:var(--text-muted); font-size:12.5px; }
+  nav.tabs button:hover { background:var(--bg-raised); color:var(--text); }
+  nav.tabs button.active { background:var(--accent-soft); color:var(--text); font-weight:600; }
+  nav.tabs button.active::after { content:''; display:block; height:2px; background:var(--accent);
+    border-radius:2px; margin-top:4px; }
+
+  main { flex:1; display:flex; min-height:0; }
+
+  /* ===== 左栏：数据版本 + 文件列表 ===== */
+  aside.left { width:236px; min-width:236px; display:flex; flex-direction:column;
+    background:var(--bg-base); border-right:1px solid var(--border); }
+  .section-title { display:flex; align-items:center; justify-content:space-between;
+    height:30px; padding:0 12px; color:var(--text-muted); font-size:11px; font-weight:700;
+    letter-spacing:.06em; text-transform:uppercase; }
+  .tree { padding:2px 6px; font-size:12px; }
+  .tree .item { display:flex; align-items:center; gap:6px; padding:4px 8px; border-radius:6px; cursor:pointer; }
+  .tree .item:hover { background:var(--bg-raised); }
+  .tree .item.active { background:var(--accent-soft); color:var(--text); }
+  .tree .caret { color:var(--text-subtle); font-size:9px; }
+  .tree .children { padding-left:18px; }
+  .filelist { flex:1; overflow:auto; border-top:1px solid var(--border); }
+  .file { display:flex; align-items:center; gap:8px; padding:5px 12px; cursor:pointer;
+    border-left:3px solid transparent; }
+  .file:hover { background:var(--bg-raised); }
+  .file.selected { background:var(--bg-raised); border-left-color:var(--accent); }
+  .file .name { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .file .sub { color:var(--text-subtle); font-size:10.5px; font-family:var(--mono); }
+  .st { width:8px; height:8px; border-radius:50%; flex:none; }
+  .st.ok { background:var(--teal); box-shadow:0 0 5px rgba(45,212,191,.6); }
+  .st.pending { background:var(--amber); }
+  .st.none { background:var(--text-subtle); }
+  .cls-tag { font-size:10px; padding:1px 6px; border-radius:4px; font-weight:600; }
+
+  /* ===== 中栏：画布 ===== */
+  section.canvas { flex:1; position:relative; background:var(--bg-deep); display:flex;
+    align-items:center; justify-content:center; min-width:0; }
+  .canvas-frame { position:relative; width:min(76%,760px); aspect-ratio:4/3; border:1px solid var(--border-strong); }
+  .canvas-frame svg { width:100%; height:100%; display:block; }
+  .canvas-status { position:absolute; left:12px; bottom:12px; display:flex; gap:10px;
+    padding:4px 12px; border-radius:20px; background:var(--surface); border:1px solid var(--border);
+    font-family:var(--mono); font-size:11px; color:var(--text-muted); }
+  .canvas-status b { color:var(--text); font-weight:600; }
+  .badge { position:absolute; transform:translate(-2px,-100%); padding:1px 7px; border-radius:4px;
+    font-size:10.5px; font-weight:700; white-space:nowrap; }
+  .sel-hint { position:absolute; left:12px; top:12px; font-size:11px; color:var(--text-subtle);
+    font-family:var(--mono); }
+
+  /* ===== 右栏：标注列表 / 属性 / Tag / 统计 ===== */
+  aside.right { width:272px; min-width:272px; display:flex; flex-direction:column;
+    background:var(--bg-base); border-left:1px solid var(--border); }
+  .group { border-bottom:1px solid var(--border); }
+  .group > .g-title { display:flex; align-items:center; justify-content:space-between;
+    height:30px; padding:0 12px; font-size:11px; font-weight:700; letter-spacing:.05em; color:var(--text-muted); }
+  .ann-row { display:flex; align-items:center; gap:8px; padding:4px 12px; border-radius:6px; cursor:pointer; }
+  .ann-row:hover { background:var(--bg-raised); }
+  .ann-row.selected { background:var(--accent-soft); }
+  .ann-row .color { width:10px; height:10px; border-radius:3px; flex:none; }
+  .ann-row .lbl { flex:1; }
+  .ann-row .src { font-size:10px; color:var(--text-subtle); }
+  .props { padding:8px 12px; display:grid; grid-template-columns:64px 1fr; gap:4px 10px; font-size:11.5px; }
+  .props dt { color:var(--text-subtle); }
+  .props dd { font-family:var(--mono); }
+  .kpts { padding:2px 12px 8px; }
+  .kpt { display:flex; align-items:center; gap:8px; padding:2px 0; font-size:11.5px; }
+  .kpt .v { width:14px; text-align:center; font-size:10px; }
+  .tag-chips { display:flex; flex-wrap:wrap; gap:6px; padding:4px 12px 10px; }
+  .tag-chip { padding:2px 9px; border-radius:20px; font-size:11px; background:var(--accent-soft);
+    border:1px solid rgba(94,106,210,.35); cursor:pointer; }
+  .tag-chip.x { color:var(--text-subtle); font-size:10px; }
+  .stats { display:grid; grid-template-columns:1fr 1fr; gap:6px; padding:6px 12px 12px; }
+  .stat { background:var(--surface); border:1px solid var(--border); border-radius:var(--r); padding:6px 8px; }
+  .stat .k { font-size:10px; color:var(--text-subtle); }
+  .stat .v { font-size:15px; font-weight:700; font-family:var(--mono); }
+  .stat .v.green { color:var(--green); } .stat .v.amber { color:var(--amber); }
+
+  /* ===== 底部状态栏 ===== */
+  footer { height:26px; display:flex; align-items:center; gap:16px; padding:0 12px;
+    background:var(--bg-elevated); border-top:1px solid var(--border);
+    font-size:11px; color:var(--text-muted); font-family:var(--mono); }
+  footer .kbd { padding:1px 6px; border:1px solid var(--border-strong); border-radius:4px;
+    background:var(--surface); font-size:10px; color:var(--text); }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="brand"><span class="dot"></span>AutoLabel Dock</div>
+    <span class="proj">项目: <b>胶环检测-v3</b> <span class="chip teal">segment</span></span>
+    <div class="spacer"></div>
+    <span style="color:var(--text-subtle)">12:04 · GPU 空闲</span>
+  </header>
+
+  <nav class="tabs">
+    <button>主页</button><button class="active">标注</button><button>预览</button>
+    <button>训练</button><button>模型</button><button>小工具</button>
+  </nav>
+
+  <main>
+    <aside class="left">
+      <div class="section-title">数据版本 <span style="color:var(--accent)">＋</span></div>
+      <div class="tree">
+        <div class="item active"><span class="caret">▾</span>全部图片</div>
+        <div class="children">
+          <div class="item"><span class="caret">▾</span>version-a</div>
+          <div class="item"><span class="caret">▸</span>version-b</div>
+          <div class="item"><span class="caret">▸</span>version-c</div>
+        </div>
+      </div>
+      <div class="section-title">图片列表 <span style="color:var(--text-subtle)">12/240</span></div>
+      <div class="filelist">
+        <div class="file selected"><span class="st ok"></span><span class="name">cam01_0127.jpg</span><span class="cls-tag" style="background:rgba(127,220,166,.15);color:#7FDCA6">item</span></div>
+        <div class="file"><span class="st ok"></span><span class="name">cam01_0128.jpg</span><span class="cls-tag" style="background:rgba(127,220,166,.15);color:#7FDCA6">item</span></div>
+        <div class="file"><span class="st pending"></span><span class="name">cam01_0129.jpg</span><span class="cls-tag" style="background:rgba(245,158,11,.15);color:var(--amber)">item?</span></div>
+        <div class="file"><span class="st none"></span><span class="name">cam02_0001.jpg</span></div>
+        <div class="file"><span class="st none"></span><span class="name">cam02_0002.jpg</span></div>
+        <div class="file"><span class="st ok"></span><span class="name">cam03_0088.jpg</span><span class="cls-tag" style="background:rgba(127,220,166,.15);color:#7FDCA6">item</span></div>
+        <div class="file"><span class="st ok"></span><span class="name">cam03_0089.jpg</span></div>
+        <div class="file"><span class="st pending"></span><span class="name">cam03_0090.jpg</span></div>
+      </div>
+    </aside>
+
+    <section class="canvas">
+      <div class="canvas-frame">
+        <svg viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#1a2336"/><stop offset="1" stop-color="#0d1220"/>
+            </linearGradient>
+            <linearGradient id="conv" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0" stop-color="#2b3a55"/><stop offset="1" stop-color="#3a4c6e"/>
+            </linearGradient>
+          </defs>
+          <rect width="800" height="600" fill="url(#bg)"/>
+          <rect x="40" y="330" width="720" height="90" rx="10" fill="url(#conv)"/>
+          <g stroke="#5c6f92" stroke-width="2" opacity=".5">
+            <line x1="60" y1="340" x2="60" y2="410"/><line x1="120" y1="340" x2="120" y2="410"/>
+            <line x1="180" y1="340" x2="180" y2="410"/><line x1="240" y1="340" x2="240" y2="410"/>
+            <line x1="300" y1="340" x2="300" y2="410"/><line x1="360" y1="340" x2="360" y2="410"/>
+            <line x1="420" y1="340" x2="420" y2="410"/><line x1="480" y1="340" x2="480" y2="410"/>
+            <line x1="540" y1="340" x2="540" y2="410"/><line x1="600" y1="340" x2="600" y2="410"/>
+            <line x1="660" y1="340" x2="660" y2="410"/><line x1="720" y1="340" x2="720" y2="410"/>
+          </g>
+          <!-- 目标物体 -->
+          <ellipse cx="210" cy="375" rx="42" ry="22" fill="#4a5f85" stroke="#7d93ba" stroke-width="3"/>
+          <circle cx="430" cy="370" r="26" fill="#4a5f85" stroke="#7d93ba" stroke-width="3"/>
+          <ellipse cx="610" cy="378" rx="50" ry="24" fill="#4a5f85" stroke="#7d93ba" stroke-width="3"/>
+          <rect x="90" y="90" width="150" height="110" rx="8" fill="#23304a"/>
+          <circle cx="560" cy="140" r="46" fill="#23304a"/>
+        </svg>
+        <!-- 标注 overlay -->
+        <svg viewBox="0 0 800 600" style="position:absolute;inset:0" xmlns="http://www.w3.org/2000/svg">
+          <!-- 选中框(多边形/实例分割): item -->
+          <path d="M168,353 L252,353 L256,397 L170,399 Z" fill="rgba(45,212,191,.10)" stroke="#2DD4BF" stroke-width="2.5"/>
+          <g fill="none" stroke="#2DD4BF" stroke-width="2">
+            <rect x="164" y="349" width="96" height="54" opacity=".35" stroke-dasharray="3 3"/>
+          </g>
+          <!-- 圆目标: item2 -->
+          <circle cx="430" cy="370" r="30" fill="rgba(94,106,210,.12)" stroke="#8B93E8" stroke-width="2.5"/>
+          <!-- OBB 旋转框: item3 -->
+          <path d="M560,140 L614,112 L636,150 L582,178 Z" fill="rgba(245,158,11,.10)" stroke="#F59E0B" stroke-width="2.5"/>
+          <circle cx="614" cy="112" r="5" fill="#F59E0B" stroke="#0B0F1A" stroke-width="1.5"/>
+          <!-- 未确认预测(虚线) -->
+          <rect x="88" y="88" width="154" height="114" fill="none" stroke="#F87171" stroke-width="1.5" stroke-dasharray="5 4"/>
+          <!-- 标签胶囊 -->
+          <g font-family="Inter,Segoe UI,system-ui" font-size="11" font-weight="700">
+            <rect x="168" y="338" width="52" height="17" rx="4" fill="#0B0F1A"/>
+            <rect x="168" y="338" width="52" height="17" rx="4" fill="#2DD4BF" opacity=".18"/>
+            <text x="174" y="351" fill="#2DD4BF">item ✓</text>
+            <rect x="416" y="338" width="42" height="17" rx="4" fill="#8B93E8"/>
+            <text x="422" y="351" fill="#0B0F1A">item2</text>
+            <rect x="556" y="104" width="42" height="17" rx="4" fill="#F59E0B"/>
+            <text x="562" y="117" fill="#0B0F1A">item3</text>
+            <rect x="88" y="76" width="46" height="17" rx="4" fill="#F87171"/>
+            <text x="94" y="89" fill="#0B0F1A">⚡ auto</text>
+          </g>
+        </svg>
+        <div class="sel-hint">选择模式 · 拖拽空白平移 · 滚轮缩放</div>
+        <div class="canvas-status"><span>图 <b>12</b>/240</span><span>缩放 <b>85%</b></span><span>类别 <b>1</b></span></div>
+      </div>
+    </section>
+
+    <aside class="right">
+      <div class="group">
+        <div class="g-title">标注列表 <span style="color:var(--text-subtle)">4 项</span></div>
+        <div class="ann-row selected"><span class="color" style="background:#2DD4BF"></span><span class="lbl">item</span><span class="src">确认</span></div>
+        <div class="ann-row"><span class="color" style="background:#8B93E8"></span><span class="lbl">item2</span><span class="src">确认</span></div>
+        <div class="ann-row"><span class="color" style="background:#F59E0B"></span><span class="lbl">item3</span><span class="src">确认</span></div>
+        <div class="ann-row"><span class="color" style="background:#F87171"></span><span class="lbl">item</span><span class="src">auto</span></div>
+      </div>
+      <div class="group">
+        <div class="g-title">属性</div>
+        <dl class="props">
+          <dt>类别</dt><dd>item</dd>
+          <dt>状态</dt><dd style="color:var(--green)">已确认</dd>
+          <dt>面积</dt><dd>1,284 px²</dd>
+          <dt>置信度</dt><dd>—</dd>
+          <dt>来源</dt><dd>manual</dd>
+        </dl>
+      </div>
+      <div class="group">
+        <div class="g-title">关键点</div>
+        <div class="kpts">
+          <div class="kpt"><span class="v" style="color:var(--teal)">●</span><span>center</span></div>
+          <div class="kpt"><span class="v" style="color:var(--text-subtle)">◑</span><span>edge_left</span></div>
+        </div>
+      </div>
+      <div class="group">
+        <div class="g-title">Tag</div>
+        <div class="tag-chips"><span class="tag-chip">ok <span class="x">×</span></span><span class="tag-chip">批次A <span class="x">×</span></span><span class="tag-chip" style="border-style:dashed">＋ 添加</span></div>
+      </div>
+      <div class="group">
+        <div class="g-title">项目统计</div>
+        <div class="stats">
+          <div class="stat"><div class="k">总图片</div><div class="v">240</div></div>
+          <div class="stat"><div class="k">已标注</div><div class="v green">196</div></div>
+          <div class="stat"><div class="k">待确认</div><div class="v amber">18</div></div>
+          <div class="stat"><div class="k">全部确认</div><div class="v">178</div></div>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <footer>
+    <span>项目目录: <span style="color:var(--text)">/data/glue-ring-v3</span></span>
+    <span>就绪</span>
+    <span style="margin-left:auto">
+      <span class="kbd">W</span> 框 <span class="kbd">P</span> 多边形 <span class="kbd">O</span> 旋转 <span class="kbd">K</span> 关键点 <span class="kbd">V</span> 选择
+      <span class="kbd">Space</span> 确认
+    </span>
+  </footer>
+</div>
+</body>
+</html>

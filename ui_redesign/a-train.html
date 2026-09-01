@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>方案 A · 训练工作区 — AutoLabel Dock 重设计</title>
+<style>
+:root{
+  --bg:#0B0F16;--bg-deep:#070A10;--panel:#101623;--panel-2:#141C2C;--line:#1E2838;--line-strong:#2C3A50;
+  --text:#E8EEF7;--text-2:#9FB0C8;--text-3:#5D6E88;--accent:#4D9FFF;--accent-dim:#1E3A5F;
+  --ok:#3ECF8E;--warn:#F5B83D;--bad:#F16A5D;--teal:#22D3EE;--mono:"SF Mono",ui-monospace,Menlo,monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,"PingFang SC","Noto Sans SC",sans-serif;
+  font-size:13px;overflow:hidden;-webkit-font-smoothing:antialiased}
+.app{display:grid;grid-template-columns:56px 1fr 292px;grid-template-rows:44px 1fr 34px;height:100vh;
+  grid-template-areas:"rail topbar topbar" "rail main inspector" "rail tasks tasks"}
+.rail{grid-area:rail;background:var(--bg-deep);border-right:1px solid var(--line);display:flex;flex-direction:column;
+  align-items:center;padding:10px 0 12px;gap:2px;z-index:30}
+.logo{width:34px;height:34px;margin-bottom:10px}
+.nav-btn{width:42px;height:42px;border-radius:10px;display:flex;align-items:center;justify-content:center;color:var(--text-3);
+  cursor:pointer;position:relative;margin-bottom:2px;border:1px solid transparent;transition:all .15s}
+.nav-btn:hover{color:var(--text-2);background:var(--panel)}
+.nav-btn.active{color:var(--accent);background:var(--accent-dim);border-color:#2B4A75}
+.nav-btn .badge{position:absolute;top:4px;right:4px;min-width:15px;height:15px;padding:0 4px;border-radius:8px;
+  background:var(--bad);color:#fff;font-size:9px;font-weight:600;display:flex;align-items:center;justify-content:center}
+.nav-btn .badge.blue{background:var(--accent)}
+.nav-tip{position:absolute;left:52px;top:50%;transform:translateY(-50%);background:#1A2334;border:1px solid var(--line-strong);
+  padding:5px 9px;border-radius:6px;font-size:12px;white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .12s;z-index:99}
+.nav-btn:hover .nav-tip{opacity:1}
+.rail-ic{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.rail-spacer{flex:1}
+.loop-ring{width:40px;height:40px;position:relative;cursor:pointer;margin-bottom:8px}
+.loop-ring .nav-tip{width:170px}
+.loop-ring .pulse{position:absolute;inset:-3px;border-radius:50%;border:1px solid var(--accent);animation:pulse 2.2s ease-out infinite}
+@keyframes pulse{0%{opacity:.7;transform:scale(.85)}70%{opacity:0;transform:scale(1.25)}100%{opacity:0}}
+.topbar{grid-area:topbar;background:var(--panel);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:14px;padding:0 14px}
+.proj{display:flex;align-items:center;gap:9px;padding:5px 10px 5px 6px;border-radius:8px;cursor:pointer;border:1px solid transparent}
+.proj:hover{background:var(--panel-2);border-color:var(--line)}
+.proj-dot{width:22px;height:22px;border-radius:6px;background:linear-gradient(135deg,#1D3A63,#123252);display:flex;
+  align-items:center;justify-content:center;font-size:10px;color:var(--accent);font-weight:700}
+.proj b{font-size:13px;font-weight:600}
+.proj .task-tag{font-size:10px;color:var(--accent);background:var(--accent-dim);padding:2px 6px;border-radius:4px;margin-left:2px}
+.proj svg{width:12px;height:12px;stroke:var(--text-3)}
+.cmdk{flex:1;max-width:420px;height:28px;background:var(--bg);border:1px solid var(--line);border-radius:7px;display:flex;
+  align-items:center;gap:8px;padding:0 10px;color:var(--text-3)}
+.cmdk svg{width:13px;height:13px;stroke:var(--text-3)}
+.cmdk span{font-size:12px}
+.cmdk kbd{margin-left:auto;font-family:var(--mono);font-size:10px;border:1px solid var(--line-strong);border-radius:4px;padding:1px 5px}
+.chip{display:flex;align-items:center;gap:6px;height:26px;padding:0 10px;border-radius:7px;background:var(--bg);
+  border:1px solid var(--line);font-size:11.5px;color:var(--text-2)}
+.chip .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);box-shadow:0 0 5px var(--ok)}
+.chip b{color:var(--text);font-weight:600}
+/* 主区：参数列 | 图表+日志 */
+.main{grid-area:main;display:grid;grid-template-columns:336px 1fr;min-width:0;background:var(--bg)}
+.params{border-right:1px solid var(--line);overflow-y:auto;background:var(--panel)}
+.pgrp{border-bottom:1px solid var(--line);padding:11px 14px}
+.pgrp .ph{display:flex;align-items:center;gap:7px;font-size:11px;font-weight:700;color:var(--text-2);letter-spacing:.06em;
+  cursor:pointer;margin-bottom:9px}
+.pgrp .ph svg{width:11px;height:11px;stroke:var(--text-3);fill:none;stroke-width:2.4}
+.pgrp .ph .mini{margin-left:auto;font-family:var(--mono);font-size:9.5px;color:var(--text-3);font-weight:400}
+.prow{display:grid;grid-template-columns:88px 1fr;gap:8px;align-items:center;margin-bottom:7px;font-size:12px}
+.prow .k{color:var(--text-3)}
+.prow .v{background:var(--bg);border:1px solid var(--line);border-radius:6px;height:26px;display:flex;align-items:center;
+  padding:0 8px;font-family:var(--mono);font-size:11.5px;color:var(--text);justify-content:space-between}
+.prow .v em{font-style:normal;color:var(--text-3);font-size:10px}
+.prow .v .btn-in{color:var(--accent);cursor:pointer;font-size:10.5px}
+.chipset{display:flex;flex-wrap:wrap;gap:5px}
+.fchip{font-size:10.5px;padding:3px 9px;border-radius:12px;border:1px solid var(--line-strong);color:var(--text-2);cursor:pointer}
+.fchip.on{background:var(--accent-dim);border-color:var(--accent);color:var(--accent)}
+.tpl{display:flex;gap:6px;margin-bottom:9px}
+.tpl .box{flex:1;background:var(--bg);border:1px solid var(--line);border-radius:6px;height:26px;display:flex;align-items:center;
+  padding:0 9px;color:var(--text-2);font-size:11.5px;justify-content:space-between;cursor:pointer}
+.tpl .box svg{width:10px;height:10px;stroke:var(--text-3)}
+.tplbtn{height:26px;padding:0 9px;border-radius:6px;border:1px solid var(--line-strong);background:transparent;
+  color:var(--text-2);font-size:10.5px;cursor:pointer;white-space:nowrap}
+.tplbtn:hover{color:var(--accent);border-color:var(--accent)}
+.right{display:grid;grid-template-rows:1fr 1fr 132px;min-width:0}
+.chart-card{margin:12px 12px 0;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 14px 6px;
+  display:flex;flex-direction:column;min-height:0}
+.chart-card .ch{display:flex;align-items:baseline;gap:10px;margin-bottom:2px}
+.chart-card .ch b{font-size:12.5px}
+.chart-card .ch small{color:var(--text-3);font-size:10.5px}
+.chart-card .ch .big{margin-left:auto;font-family:var(--mono);font-size:17px;font-weight:700}
+.chart-card .ch .big.o{color:var(--accent)}
+.chart-card .ch .big.t{color:var(--teal)}
+.chart-card svg{flex:1;width:100%;min-height:0}
+.lg{display:flex;gap:12px;font-size:10px;color:var(--text-3);margin-top:2px}
+.lg i{display:inline-block;width:14px;height:2.5px;border-radius:2px;margin-right:4px;vertical-align:middle}
+.logcard{margin:12px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:9px 14px;overflow:hidden}
+.logcard .lt{font-size:10px;font-weight:700;letter-spacing:.14em;color:var(--text-3);margin-bottom:5px;display:flex;gap:10px}
+.logcard .lt .lv{color:var(--accent);font-family:var(--mono)}
+.logcard .lt .src{margin-left:auto;font-family:var(--mono);font-weight:400;letter-spacing:0}
+.log{font-family:var(--mono);font-size:10.8px;line-height:1.7;color:var(--text-2)}
+.log .e{color:var(--accent)}.log .g{color:var(--teal)}.log .d{color:var(--text-3)}
+/* 检查器 */
+.inspector{grid-area:inspector;background:var(--panel);border-left:1px solid var(--line);overflow-y:auto;display:flex;flex-direction:column}
+.insp-sec{border-bottom:1px solid var(--line);padding:12px 14px}
+.insp-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.insp-h .t{font-size:10.5px;font-weight:600;letter-spacing:.12em;color:var(--text-3)}
+.insp-h .x{font-size:11px;color:var(--text-3);cursor:pointer}
+.insp-h .x:hover{color:var(--accent)}
+.qitem{border:1px solid var(--line);border-radius:10px;padding:10px 11px;margin-bottom:8px}
+.qitem.run{border-color:rgba(77,159,255,.5);background:linear-gradient(180deg,rgba(77,159,255,.07),transparent)}
+.qitem.wait .rd{background:var(--line-strong)}
+.qitem .qt{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:600}
+.qitem .qt .rd{width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 8px var(--accent);
+  animation:blink 1.2s steps(2) infinite}
+.qitem.wait .qt .rd{background:var(--line-strong);box-shadow:none;animation:none}
+@keyframes blink{50%{opacity:.25}}
+.qitem .qm{font-family:var(--mono);font-size:10.5px;color:var(--text-3);margin-top:5px;line-height:1.5}
+.qitem .qb{height:3.5px;border-radius:2px;background:var(--line);margin-top:7px;overflow:hidden}
+.qitem .qb i{display:block;height:100%;background:var(--accent)}
+.btn{height:32px;border-radius:8px;border:1px solid var(--line-strong);background:var(--panel-2);color:var(--text);
+  font-size:12.5px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;width:100%}
+.btn:hover{border-color:var(--accent);color:var(--accent)}
+.btn.start{background:var(--accent);border-color:var(--accent);color:#04121F;font-weight:700;margin-bottom:8px}
+.btn.start:hover{background:#66ADFF}
+.btn.stop:hover{border-color:var(--bad);color:var(--bad)}
+.hint{font-size:11px;color:var(--text-3);line-height:1.65}
+.tasks{grid-area:tasks;background:var(--bg-deep);border-top:1px solid var(--line);display:flex;align-items:center;
+  padding:0 14px;gap:18px;font-size:11.5px;color:var(--text-2)}
+.task{display:flex;align-items:center;gap:9px}
+.task .sp{width:90px;height:4px;border-radius:2px;background:var(--line);overflow:hidden}
+.task .sp i{display:block;height:100%;background:var(--accent)}
+.task .lb{font-family:var(--mono);font-size:10.5px}
+.tstat{margin-left:auto;display:flex;gap:16px;font-family:var(--mono);font-size:10.5px;color:var(--text-3)}
+</style>
+</head>
+<body>
+<div class="app">
+  <nav class="rail">
+    <svg class="logo" viewBox="0 0 34 34" width="34" height="34">
+      <circle cx="17" cy="17" r="14" fill="none" stroke="#24344E" stroke-width="2"/>
+      <circle cx="17" cy="17" r="8.5" fill="none" stroke="#4D9FFF" stroke-width="2"/><circle cx="17" cy="17" r="2.6" fill="#4D9FFF"/>
+    </svg>
+    <div class="nav-btn"><svg class="rail-ic" viewBox="0 0 24 24"><path d="M3 11l9-8 9 8M5 10v10h5v-6h4v6h5V10"/></svg><span class="nav-tip">主页</span></div>
+    <div class="nav-btn"><svg class="rail-ic" viewBox="0 0 24 24"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg><span class="nav-tip">标注</span></div>
+    <div class="nav-btn"><svg class="rail-ic" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><span class="nav-tip">预览</span></div>
+    <div class="nav-btn active"><svg class="rail-ic" viewBox="0 0 24 24"><path d="M3 17l5-6 4 4 6-8 3 4"/><path d="M3 21h18"/></svg><span class="nav-tip">训练 · 队列中 2</span><span class="badge blue">2</span></div>
+    <div class="nav-btn"><svg class="rail-ic" viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg><span class="nav-tip">模型</span></div>
+    <div class="nav-btn"><svg class="rail-ic" viewBox="0 0 24 24"><path d="M8 9l-4 3 4 3M16 9l4 3-4 3M13 5l-2 14"/></svg><span class="nav-tip">小工具</span></div>
+    <div class="rail-spacer"></div>
+    <div class="loop-ring">
+      <span class="nav-tip"><b style="color:var(--text)">闭环进度</b><br>已确认 967/1,284 · 75%<br><span style="color:var(--ok)">● 训练中 epoch 47/120</span></span>
+      <div class="pulse"></div>
+      <svg viewBox="0 0 40 40" width="40" height="40">
+        <circle cx="20" cy="20" r="16" fill="none" stroke="#1B2536" stroke-width="3.5"/>
+        <circle cx="20" cy="20" r="16" fill="none" stroke="#3ECF8E" stroke-width="3.5" stroke-dasharray="75.4 100.5"
+          stroke-linecap="round" transform="rotate(-90 20 20)"/>
+        <text x="20" y="23.5" text-anchor="middle" font-size="10" fill="#E8EEF7" font-family="SF Mono,monospace">75%</text>
+      </svg>
+    </div>
+    <div class="nav-btn"><svg class="rail-ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2z"/></svg><span class="nav-tip">设置</span></div>
+  </nav>
+
+  <header class="topbar">
+    <div class="proj"><div class="proj-dot">胶环</div><b>胶环密封检测</b><span class="task-tag">segment</span>
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></div>
+    <div class="cmdk"><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+      <span>搜索图片、类别、模型或命令…</span><kbd>⌘K</kbd></div>
+    <div style="margin-left:auto;display:flex;gap:8px">
+      <span class="chip"><span class="dot"></span> CUDA:0 · 8.2/12 GB</span>
+      <span class="chip">训练中 <b>ring-seg-v4</b></span>
+    </div>
+  </header>
+
+  <main class="main">
+    <aside class="params">
+      <div class="pgrp">
+        <div class="ph"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>任务配置<span class="mini">segment</span></div>
+        <div class="prow"><span class="k">任务类型</span><span class="v">segment<em>随项目</em></span></div>
+        <div class="prow"><span class="k">模型名</span><span class="v">ring-seg-v5<em>留空自动</em></span></div>
+        <div class="prow"><span class="k">基础模型</span><span class="v">yolo26m-seg<span class="btn-in">浏览…</span></span></div>
+        <div class="prow"><span class="k">设备</span><span class="v">CUDA:0<em>AUTO</em></span></div>
+        <div class="tpl">
+          <div class="box">胶环两阶段-阶段一<svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></div>
+          <button class="tplbtn">存为模板</button>
+          <button class="tplbtn">删模板</button>
+        </div>
+      </div>
+      <div class="pgrp">
+        <div class="ph"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>基本参数</div>
+        <div class="prow"><span class="k">Epochs</span><span class="v">120</span></div>
+        <div class="prow"><span class="k">Batch</span><span class="v">4</span></div>
+        <div class="prow"><span class="k">ImgSz</span><span class="v">1024</span></div>
+        <div class="prow"><span class="k">Freeze</span><span class="v">10<em>☐ 默认</em></span></div>
+        <div class="prow"><span class="k">Workers</span><span class="v">4</span></div>
+        <div class="prow"><span class="k">Patience</span><span class="v">25</span></div>
+        <div class="prow"><span class="k">优化器</span><span class="v">AdamW</span></div>
+        <div class="prow"><span class="k">学习率 lr0</span><span class="v">0.001</span></div>
+        <div class="prow"><span class="k">验证集比例</span><span class="v">0.25</span></div>
+      </div>
+      <div class="pgrp">
+        <div class="ph"><svg viewBox="0 0 24 24"><path d="M9 9l6 6M15 9l-6 6"/></svg>优化器扩展<span class="mini">7 项</span></div>
+        <div class="prow"><span class="k">lrf</span><span class="v">0.01</span></div>
+        <div class="prow"><span class="k">momentum</span><span class="v">0.937</span></div>
+        <div class="prow"><span class="k">weight_decay</span><span class="v">0.0005</span></div>
+        <div class="prow"><span class="k">warmup_ep</span><span class="v">3.0</span></div>
+      </div>
+      <div class="pgrp">
+        <div class="ph"><svg viewBox="0 0 24 24"><path d="M9 9l6 6M15 9l-6 6"/></svg>数据增强<span class="mini">segment 组</span></div>
+        <div class="chipset" style="margin-bottom:8px">
+          <span class="fchip">hsv_s 0.1</span><span class="fchip">degrees 2</span><span class="fchip">scale 0.1</span>
+          <span class="fchip on">flipud 0.5</span><span class="fchip on">fliplr 0.5</span>
+          <span class="fchip">mosaic 0</span><span class="fchip">mixup 0</span><span class="fchip">copy_paste 0</span>
+        </div>
+        <div class="prow"><span class="k">mask_ratio</span><span class="v">2<em>默认 4</em></span></div>
+        <div class="prow"><span class="k">overlap_mask</span><span class="v">✓ 合并</span></div>
+        <div style="height:4px"></div>
+        <button class="tplbtn" style="width:100%">🔮 预览增强效果…</button>
+      </div>
+      <div class="pgrp" style="border-bottom:none">
+        <div class="ph"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>其他</div>
+        <div class="prow"><span class="k">single_cls</span><span class="v">☐ 关</span></div>
+        <div class="prow"><span class="k">resume</span><span class="v">☐ 关</span></div>
+      </div>
+    </aside>
+
+    <section class="right">
+      <div class="chart-card">
+        <div class="ch"><b>Loss</b><small>train / val</small><span class="big o">0.214</span></div>
+        <svg viewBox="0 0 600 150" preserveAspectRatio="none">
+          <g stroke="#1C2634" stroke-width="1"><line x1="0" y1="37" x2="600" y2="37"/><line x1="0" y1="75" x2="600" y2="75"/><line x1="0" y1="112" x2="600" y2="112"/><line x1="75" y1="0" x2="75" y2="150"/><line x1="150" y1="0" x2="150" y2="150"/><line x1="225" y1="0" x2="225" y2="150"/><line x1="300" y1="0" x2="300" y2="150"/><line x1="375" y1="0" x2="375" y2="150"/><line x1="450" y1="0" x2="450" y2="150"/><line x1="525" y1="0" x2="525" y2="150"/></g>
+          <polyline points="0,16 25,44 50,62 75,74 100,82 150,93 200,101 250,107 300,113 350,118 400,122 432,125" fill="none" stroke="#4D9FFF" stroke-width="2"/>
+          <polyline points="0,26 25,52 50,70 75,82 100,91 150,102 200,110 250,116 300,122 350,127 400,132 432,135" fill="none" stroke="#22D3EE" stroke-width="1.6" stroke-dasharray="5 4"/>
+          <circle cx="432" cy="125" r="3.4" fill="#4D9FFF"/>
+          <text x="440" y="122" fill="#5D6E88" font-size="9.5" font-family="SF Mono,monospace">epoch 47</text>
+        </svg>
+        <div class="lg"><span><i style="background:#4D9FFF"></i>train 0.214</span><span><i style="background:#22D3EE"></i>val 0.241</span><span style="margin-left:auto">patience 25 · 最佳 epoch 44</span></div>
+      </div>
+      <div class="chart-card">
+        <div class="ch"><b>mAP</b><small>val</small><span class="big t">0.938</span></div>
+        <svg viewBox="0 0 600 150" preserveAspectRatio="none">
+          <g stroke="#1C2634" stroke-width="1"><line x1="0" y1="37" x2="600" y2="37"/><line x1="0" y1="75" x2="600" y2="75"/><line x1="0" y1="112" x2="600" y2="112"/><line x1="75" y1="0" x2="75" y2="150"/><line x1="150" y1="0" x2="150" y2="150"/><line x1="225" y1="0" x2="225" y2="150"/><line x1="300" y1="0" x2="300" y2="150"/><line x1="375" y1="0" x2="375" y2="150"/><line x1="450" y1="0" x2="450" y2="150"/><line x1="525" y1="0" x2="525" y2="150"/></g>
+          <polyline points="0,142 25,124 50,104 75,88 100,77 150,61 200,50 250,41 300,34 350,28 400,24 432,21" fill="none" stroke="#22D3EE" stroke-width="2"/>
+          <polyline points="0,146 25,136 50,121 75,106 100,95 150,80 200,68 250,59 300,52 350,46 400,41 432,38" fill="none" stroke="#4D9FFF" stroke-width="1.6" stroke-dasharray="5 4"/>
+          <circle cx="432" cy="21" r="3.4" fill="#22D3EE"/>
+          <text x="440" y="20" fill="#5D6E88" font-size="9.5" font-family="SF Mono,monospace">mAP50 0.938</text>
+        </svg>
+        <div class="lg"><span><i style="background:#22D3EE"></i>mAP50 0.938</span><span><i style="background:#4D9FFF"></i>mAP50-95 0.859</span><span style="margin-left:auto">val 242 张 · 分层抽样</span></div>
+      </div>
+      <div class="logcard">
+        <div class="lt">训练日志 · <span class="lv">ring-seg-v4</span><span class="src" style="color:var(--text-3)">events.jsonl · Qt-free 子进程 · 可取消</span></div>
+        <div class="log">
+          <span class="d">23:41:07</span> <span class="e">[epoch 47/120]</span> box_loss=<b>0.2143</b> seg_loss=<b>0.4871</b> mAP50=<span class="g">0.938</span> lr=0.00084 · 38.2 it/s · GPU 8.2GB<br>
+          <span class="d">23:40:52</span> <span class="e">[epoch 46/120]</span> mAP50=<span class="g">0.936</span> ✓ patience 3/25 · 保存 best.pt
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <aside class="inspector">
+    <div class="insp-sec">
+      <div class="insp-h"><span class="t">数据筛选</span><span class="x">重置</span></div>
+      <div class="chipset">
+        <span class="fchip on">v1-产线A</span><span class="fchip on">v2-产线B</span>
+        <span class="fchip on">仅已确认</span><span class="fchip">item</span><span class="fchip">Tag: 反光</span>
+      </div>
+      <div class="hint" style="margin-top:9px;line-height:1.7">命中 <b style="color:var(--text);font-family:var(--mono)">967</b> / 1,284 张 · 验证集 20% 分层抽样<br>留空 Tag 则使用全部已确认数据</div>
+    </div>
+    <div class="insp-sec">
+      <div class="insp-h"><span class="t">训练队列 · 串行</span><span class="x">清空等待</span></div>
+      <div class="qitem run">
+        <div class="qt"><span class="rd"></span>ring-seg-v4（进行中）</div>
+        <div class="qm">epoch 47/120 · loss 0.214<br>已运行 2h 14m · ETA 12:40</div>
+        <div class="qb"><i style="width:39%"></i></div>
+      </div>
+      <div class="qitem wait">
+        <div class="qt"><span class="rd"></span>ring-seg-v5-detect</div>
+        <div class="qm">yolo26m · 筛选: item · 967 张</div>
+        <div class="qb"><i style="width:0%"></i></div>
+      </div>
+      <div class="qitem wait">
+        <div class="qt"><span class="rd"></span>ring-obb-v2</div>
+        <div class="qm">yolo26s-obb · 筛选: v2-产线B</div>
+        <div class="qb"><i style="width:0%"></i></div>
+      </div>
+    </div>
+    <div class="insp-sec" style="border-bottom:none">
+      <div class="insp-h"><span class="t">执行</span></div>
+      <button class="btn start">加入队列（训练中 → 排队）</button>
+      <button class="btn stop">停止当前训练（并清空等待）</button>
+      <div class="hint" style="margin-top:9px">训练在独立子进程运行；单任务完成自动加载 best.pt，队列完成仅注册模型。</div>
+    </div>
+  </aside>
+
+  <footer class="tasks">
+    <div class="task">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#3ECF8E" stroke-width="2"><path d="M3 17l5-6 4 4 6-8"/></svg>
+      <span>训练 <b style="color:var(--text)">ring-seg-v4</b></span>
+      <span class="lb">epoch 47/120</span>
+      <span class="sp"><i style="width:39%"></i></span>
+      <span class="lb" style="color:var(--text-3)">ETA 12:40</span>
+    </div>
+    <div class="task">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#F5B83D" stroke-width="2"><rect x="4" y="6" width="16" height="12" rx="1"/></svg>
+      <span>批量标注</span><span class="sp"><i style="width:55%;background:var(--warn)"></i></span><span class="lb" style="color:var(--text-3)">128/231</span>
+    </div>
+    <div class="tstat"><span>数据集 /Users/data/ring-seal/datasets/train_v5</span><span>symlink 引用 · 0 额外占用</span></div>
+  </footer>
+</div>
+</body>
+</html>

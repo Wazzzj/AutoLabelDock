@@ -11,8 +11,14 @@ from src.core.annotation import Annotation
 from src.ui.canvas import AnnotationCanvas
 
 
+_APP = None
+
+
 def _app():
-    return QApplication.instance() or QApplication([])
+    global _APP
+    if _APP is None:
+        _APP = QApplication.instance() or QApplication([])
+    return _APP
 
 
 def test_polygon_hit_test_uses_mask_region_not_bbox_fill():

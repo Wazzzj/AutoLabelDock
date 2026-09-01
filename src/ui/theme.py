@@ -1,4 +1,10 @@
-"""Dark workspace theme and shared style helpers for PyQt5."""
+"""Scheme-A workbench theme (solid-color) shared style helpers for PyQt5.
+
+主题：对齐 ui_redesign/a-*.html 原型 —— 石墨藏蓝面板 + 电光蓝主按钮（实色，无玻璃/渐变）。
+- 背景：纯色 #0B0F16；面板 #101623；边框 #1E2838 / #2C3A50；文字 #E8EEF7。
+- 主按钮文字深色 #04121F（原型 primary）。圆角 8、基础字号 13px。
+- 所有 PALETTE 值保持 QColor 可解析的 hex 字符串。
+"""
 from __future__ import annotations
 from PyQt5.QtGui import QColor, QFont, QFontDatabase, QPalette
 from PyQt5.QtWidgets import QApplication
@@ -20,6 +26,7 @@ def apply_application_font(app: QApplication) -> str:
         "微软雅黑",
         "Noto Sans CJK SC",
         "Source Han Sans SC",
+        "PingFang SC",
         "SimSun",
         "宋体",
     ]
@@ -36,33 +43,35 @@ def apply_application_font(app: QApplication) -> str:
     app.setFont(font)
     return UI_FONT_FAMILY
 
+
+# 配色与 ui_redesign/a-*.html 设计稿一致（石墨藏蓝 / 钢青面板 / 电光蓝）
 PALETTE = {
-    "bg": "#11141b",
-    "bg_deep": "#0b0e14",
-    "canvas": "#151922",
-    "panel": "#1b202b",
-    "panel_alt": "#232938",
-    "panel_raised": "#2b3242",
-    "line": "#303849",
-    "line_strong": "#465268",
-    "text": "#edf2ff",
-    "text_muted": "#aab4c8",
-    "text_subtle": "#748198",
-    "ink": "#ffffff",
-    "primary": "#7c5cff",
-    "primary_hover": "#9b7cff",
-    "primary_pressed": "#6746e8",
-    "primary_soft": "#292247",
-    "selection": "#1f7aff",
-    "selection_text": "#ffffff",
-    "success": "#44d19d",
-    "success_soft": "#173729",
-    "danger": "#ff7a7a",
-    "danger_soft": "#3b2025",
-    "warning": "#f6bd60",
-    "warning_soft": "#3d2d16",
-    "violet": "#9b6dff",
-    "teal": "#4bd3c2",
+    "bg": "#0B0F16",
+    "bg_deep": "#070A10",
+    "canvas": "#0A0F16",
+    "panel": "#101623",
+    "panel_alt": "#141C2C",
+    "panel_raised": "#1B2334",
+    "line": "#1E2838",
+    "line_strong": "#2C3A50",
+    "text": "#E8EEF7",
+    "text_muted": "#9FB0C8",
+    "text_subtle": "#5D6E88",
+    "ink": "#FFFFFF",
+    "primary": "#4D9FFF",
+    "primary_hover": "#66ADFF",
+    "primary_pressed": "#3B85E6",
+    "primary_soft": "#1E3A5F",
+    "selection": "#4D9FFF",
+    "selection_text": "#FFFFFF",
+    "success": "#3ECF8E",
+    "success_soft": "#112724",
+    "danger": "#F16A5D",
+    "danger_soft": "#3B2025",
+    "warning": "#F5B83D",
+    "warning_soft": "#3D2D16",
+    "violet": "#A78BFA",
+    "teal": "#22D3EE",
 }
 
 # Backwards-compatible alias for older modules/tests that still describe the
@@ -87,6 +96,15 @@ MOCHA = {
     "sky": PALETTE["primary_hover"],
     "lavender": PALETTE["violet"],
 }
+
+
+def _rgba(hex_color: str, alpha: float) -> str:
+    """Convert a #RRGGBB hex color into an rgba() QSS string."""
+    h = hex_color.lstrip("#")
+    if len(h) != 6:
+        return hex_color
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
 
 
 def _refresh_style(widget) -> None:
@@ -130,12 +148,12 @@ def text_style(role: str = "muted") -> str:
         "section": (
             f"color: {PALETTE['text_muted']}; font-size: 13px; font-weight: 650;"
         ),
-        "body": f"color: {PALETTE['text']}; font-size: 14px;",
+        "body": f"color: {PALETTE['text']}; font-size: 13px;",
         "small": f"color: {PALETTE['text']}; font-size: 12px;",
-        "muted": f"color: {PALETTE['text_muted']}; font-size: 13px;",
+        "muted": f"color: {PALETTE['text_muted']}; font-size: 12.5px;",
         "hint": f"color: {PALETTE['text_subtle']}; font-size: 12px;",
-        "success": f"color: {PALETTE['success']}; font-size: 14px; font-weight: 650;",
-        "warning": f"color: {PALETTE['warning']}; font-size: 14px; font-weight: 650;",
+        "success": f"color: {PALETTE['success']}; font-size: 13px; font-weight: 650;",
+        "warning": f"color: {PALETTE['warning']}; font-size: 13px; font-weight: 650;",
         "error": f"color: {PALETTE['danger']}; font-size: 12px;",
     }
     return styles.get(role, styles["muted"])
@@ -151,9 +169,9 @@ def chip_style(active: bool = False) -> str:
         f" background-color: {bg};"
         f" color: {fg};"
         f" border: 1px solid {border};"
-        " border-radius: 8px;"
+        " border-radius: 13px;"
         " padding: 4px 10px;"
-        " font-size: 11px;"
+        " font-size: 12px;"
         f" font-weight: {weight};"
         "}"
         f"QToolButton:hover {{ background-color: {PALETTE['primary_soft']};"
@@ -161,11 +179,14 @@ def chip_style(active: bool = False) -> str:
     )
 
 
+# 主按钮前景色（原型 .btn.primary 深色文字）
+_PRIMARY_FG = "#04121F"
+
 STYLESHEET = f"""
 QWidget {{
-    background-color: {PALETTE['bg']};
+    background-color: transparent;
     color: {PALETTE['text']};
-    font-size: 14px;
+    font-size: 13px;
     selection-background-color: {PALETTE['selection']};
     selection-color: {PALETTE['selection_text']};
 }}
@@ -192,50 +213,51 @@ QTabBar {{
 QTabBar::tab {{
     background-color: transparent;
     color: {PALETTE['text_muted']};
-    padding: 11px 22px;
+    padding: 9px 18px;
     border: none;
-    margin-right: 2px;
-    min-height: 26px;
+    margin-right: 1px;
+    min-height: 24px;
 }}
 
 QTabBar::tab:selected {{
     background-color: {PALETTE['primary_soft']};
     color: {PALETTE['text']};
-    border-bottom: 3px solid {PALETTE['primary']};
+    border-bottom: 2px solid {PALETTE['primary']};
 }}
 
 QTabBar::tab:hover {{
     color: {PALETTE['text']};
-    background-color: {PALETTE['panel']};
+    background-color: {PALETTE['panel_alt']};
 }}
 
 QToolBar {{
     background-color: {PALETTE['panel']};
     border: 1px solid {PALETTE['line']};
-    border-radius: 10px;
-    spacing: 8px;
-    padding: 10px 12px;
+    border-radius: 8px;
+    spacing: 6px;
+    padding: 8px 10px;
 }}
 
 QToolBar::separator {{
-    background-color: {PALETTE['line']};
+    background-color: {PALETTE['line_strong']};
     width: 1px;
-    margin: 5px 8px;
+    margin: 4px 7px;
 }}
 
 QPushButton {{
-    background-color: {PALETTE['panel']};
+    background-color: {PALETTE['panel_alt']};
     color: {PALETTE['text']};
-    border: 1px solid {PALETTE['line']};
-    border-radius: 9px;
-    padding: 8px 14px;
+    border: 1px solid {PALETTE['line_strong']};
+    border-radius: 8px;
+    padding: 6px 12px;
+    font-size: 13px;
     font-weight: 600;
-    min-height: 18px;
+    min-height: 16px;
 }}
 
 QPushButton:hover {{
-    background-color: {PALETTE['panel_alt']};
     border-color: {PALETTE['primary']};
+    color: {PALETTE['primary']};
 }}
 
 QPushButton:focus {{
@@ -244,8 +266,6 @@ QPushButton:focus {{
 
 QPushButton:pressed {{
     background-color: {PALETTE['panel_raised']};
-    padding-top: 7px;
-    padding-bottom: 5px;
 }}
 
 QPushButton:checked {{
@@ -256,24 +276,27 @@ QPushButton:checked {{
 
 QPushButton:disabled {{
     color: {PALETTE['text_subtle']};
-    background-color: {PALETTE['panel_raised']};
+    background-color: {PALETTE['panel']};
     border-color: {PALETTE['line']};
 }}
 
 QPushButton[role="primary"] {{
     background-color: {PALETTE['primary']};
-    color: {PALETTE['ink']};
+    color: {_PRIMARY_FG};
     border-color: {PALETTE['primary']};
+    font-weight: 700;
 }}
 
 QPushButton[role="primary"]:hover {{
     background-color: {PALETTE['primary_hover']};
     border-color: {PALETTE['primary_hover']};
+    color: {_PRIMARY_FG};
 }}
 
 QPushButton[role="primary"]:pressed {{
     background-color: {PALETTE['primary_pressed']};
     border-color: {PALETTE['primary_pressed']};
+    color: {_PRIMARY_FG};
 }}
 
 QPushButton[role="danger"] {{
@@ -284,7 +307,7 @@ QPushButton[role="danger"] {{
 
 QPushButton[role="danger"]:hover {{
     background-color: {PALETTE['danger']};
-    color: {PALETTE['ink']};
+    color: {PALETTE['bg']};
 }}
 
 QPushButton[role="success"] {{
@@ -294,7 +317,7 @@ QPushButton[role="success"] {{
 }}
 
 QPushButton[role="secondary"] {{
-    background-color: {PALETTE['panel']};
+    background-color: {PALETTE['panel_alt']};
     color: {PALETTE['text']};
 }}
 
@@ -338,8 +361,8 @@ QToolButton {{
     background-color: transparent;
     color: {PALETTE['text_muted']};
     border: 1px solid transparent;
-    border-radius: 7px;
-    padding: 5px 8px;
+    border-radius: 6px;
+    padding: 4px 8px;
 }}
 
 QToolButton:hover {{
@@ -355,11 +378,12 @@ QToolButton:checked {{
 }}
 
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
-    background-color: {PALETTE['panel_alt']};
+    background-color: {PALETTE['bg']};
     color: {PALETTE['text']};
     border: 1px solid {PALETTE['line']};
-    border-radius: 7px;
+    border-radius: 6px;
     padding: 5px 8px;
+    font-size: 12.5px;
     selection-background-color: {PALETTE['selection']};
     selection-color: {PALETTE['selection_text']};
 }}
@@ -374,11 +398,12 @@ QComboBox::drop-down {{
 }}
 
 QTextEdit, QPlainTextEdit {{
-    background-color: {PALETTE['panel_alt']};
+    background-color: {PALETTE['bg']};
     color: {PALETTE['text']};
     border: 1px solid {PALETTE['line']};
-    border-radius: 8px;
-    padding: 8px;
+    border-radius: 6px;
+    padding: 6px;
+    font-size: 12px;
     selection-background-color: {PALETTE['selection']};
     selection-color: {PALETTE['selection_text']};
 }}
@@ -391,16 +416,16 @@ QGroupBox {{
     background-color: {PALETTE['panel']};
     border: 1px solid {PALETTE['line']};
     border-radius: 8px;
-    margin-top: 14px;
-    padding: 15px 10px 10px 10px;
-    font-weight: 650;
+    margin-top: 12px;
+    padding: 12px 8px 8px 8px;
+    font-weight: 600;
 }}
 
 QGroupBox::title {{
     subcontrol-origin: margin;
     subcontrol-position: top left;
-    left: 10px;
-    padding: 0 6px;
+    left: 9px;
+    padding: 0 5px;
     color: {PALETTE['text_muted']};
     background-color: {PALETTE['panel']};
 }}
@@ -408,12 +433,12 @@ QGroupBox::title {{
 QListWidget, QTreeWidget, QTableWidget {{
     background-color: {PALETTE['panel']};
     border: 1px solid {PALETTE['line']};
-    border-radius: 10px;
+    border-radius: 8px;
     outline: none;
 }}
 
 QListWidget::item, QTreeWidget::item {{
-    padding: 8px 10px;
+    padding: 6px 8px;
 }}
 
 QListWidget::item:selected, QTreeWidget::item:selected, QTableWidget::item:selected {{
@@ -471,7 +496,7 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
 }}
 
 QStatusBar {{
-    background-color: {PALETTE['panel']};
+    background-color: {PALETTE['bg_deep']};
     color: {PALETTE['text_muted']};
     border-top: 1px solid {PALETTE['line']};
 }}
@@ -492,7 +517,7 @@ QMenu {{
 }}
 
 QMenu::item {{
-    padding: 5px 22px;
+    padding: 5px 20px;
 }}
 
 QMenu::item:selected {{
@@ -500,7 +525,7 @@ QMenu::item:selected {{
 }}
 
 QProgressBar {{
-    background-color: {PALETTE['panel_alt']};
+    background-color: {PALETTE['bg']};
     border: 1px solid {PALETTE['line']};
     border-radius: 6px;
     text-align: center;
@@ -513,10 +538,11 @@ QProgressBar::chunk {{
 }}
 
 QToolTip {{
-    background-color: {PALETTE['text']};
-    color: {PALETTE['panel']};
-    border: 1px solid {PALETTE['line_strong']};
-    padding: 5px;
+    background-color: {PALETTE['bg_deep']};
+    color: {PALETTE['text']};
+    border: 1px solid {PALETTE['line']};
+    border-radius: 6px;
+    padding: 4px;
 }}
 
 QSplitter::handle {{
@@ -542,9 +568,9 @@ QCheckBox, QRadioButton {{
 QCheckBox::indicator, QRadioButton::indicator {{
     width: 15px;
     height: 15px;
-    border-radius: 5px;
+    border-radius: 4px;
     border: 1px solid {PALETTE['line_strong']};
-    background-color: {PALETTE['panel']};
+    background-color: {PALETTE['bg']};
 }}
 
 QCheckBox::indicator:checked, QRadioButton::indicator:checked {{
@@ -560,21 +586,32 @@ QSlider::groove:horizontal {{
 
 QSlider::handle:horizontal {{
     background-color: {PALETTE['primary']};
-    width: 16px;
-    height: 16px;
-    margin: -5px 0;
-    border-radius: 8px;
+    width: 14px;
+    height: 14px;
+    margin: -4px 0;
+    border-radius: 7px;
 }}
 """
 
 
 def apply_theme(app: QApplication) -> None:
-    """应用全局中文字体和暗色主题。"""
+    """应用全局中文字体和 Scheme-A 实色工作台主题。"""
 
     selected_font = apply_application_font(app)
     palette = app.palette()
+    palette.setColor(QPalette.Window, QColor(PALETTE["bg"]))
+    palette.setColor(QPalette.WindowText, QColor(PALETTE["text"]))
+    palette.setColor(QPalette.Base, QColor(PALETTE["bg"]))
+    palette.setColor(QPalette.AlternateBase, QColor(PALETTE["panel_alt"]))
+    palette.setColor(QPalette.Text, QColor(PALETTE["text"]))
+    palette.setColor(QPalette.Button, QColor(PALETTE["panel"]))
+    palette.setColor(QPalette.ButtonText, QColor(PALETTE["text"]))
+    palette.setColor(QPalette.ToolTipBase, QColor(PALETTE["bg_deep"]))
+    palette.setColor(QPalette.ToolTipText, QColor(PALETTE["text"]))
+    palette.setColor(QPalette.PlaceholderText, QColor(PALETTE["text_subtle"]))
     palette.setColor(QPalette.Highlight, QColor(PALETTE["selection"]))
     palette.setColor(QPalette.HighlightedText, QColor(PALETTE["selection_text"]))
+    palette.setColor(QPalette.Disabled, QPalette.Text, QColor(PALETTE["text_subtle"]))
     app.setPalette(palette)
     app.setStyleSheet(STYLESHEET)
 

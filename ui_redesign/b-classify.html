@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>方案 B · 分类标注变体 — AutoLabel Dock 重设计</title>
+<style>
+:root{
+  --bg:#0C1113;--panel:#12191C;--panel-2:#172125;--line:#202B2F;--line-strong:#2E3E44;
+  --text:#EAF1F2;--text-2:#9DB3B8;--text-3:#5F767C;--accent:#FF8A3D;--accent-soft:rgba(255,138,61,.12);
+  --teal:#2FBFA7;--ok:#3ECF8E;--warn:#F5C043;--bad:#F16A5D;--mono:"SF Mono",ui-monospace,Menlo,monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{background:var(--bg);color:var(--text);overflow:hidden;
+  font-family:-apple-system,"PingFang SC","Noto Sans SC","Microsoft YaHei",sans-serif;font-size:13px;
+  -webkit-font-smoothing:antialiased}
+.app{display:grid;grid-template-rows:160px 1fr;height:100vh}
+.header{background:linear-gradient(180deg,#101719 0%,var(--bg) 100%);border-bottom:1px solid var(--line);
+  padding:14px 22px 0;position:relative;z-index:20}
+.hd-row{display:flex;align-items:center;gap:14px;margin-bottom:8px}
+.brand{display:flex;align-items:center;gap:9px}
+.brand b{font-size:14px}
+.brand small{color:var(--text-3);font-size:11.5px}
+.hd-right{margin-left:auto;display:flex;gap:8px;align-items:center}
+.gpill{height:26px;display:flex;align-items:center;gap:6px;padding:0 10px;border:1px solid var(--line);
+  border-radius:13px;font-size:11.5px;color:var(--text-2);background:var(--panel)}
+.gpill .d{width:6px;height:6px;border-radius:50%;background:var(--ok);box-shadow:0 0 6px var(--ok)}
+.pipe{position:relative;height:98px}
+.pipe svg.wire{position:absolute;inset:0;width:100%;height:100%}
+.wire path{stroke:#26343A;stroke-width:2;fill:none}
+.wire path.flow{stroke:var(--accent);stroke-width:2;fill:none;stroke-dasharray:7 8;animation:flow 1.1s linear infinite;opacity:.9}
+@keyframes flow{to{stroke-dashoffset:-15}}
+.nodes{position:absolute;inset:0;display:flex;justify-content:space-between;align-items:flex-start;padding:0 40px}
+.node{display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;width:170px;position:relative;z-index:2}
+.node .bub{width:40px;height:40px;border-radius:50%;background:var(--panel-2);border:2px solid var(--line-strong);
+  display:flex;align-items:center;justify-content:center;color:var(--text-3)}
+.node .bub svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.node.on .bub{border-color:var(--accent);color:var(--accent);background:#1A1712;
+  box-shadow:0 0 0 4px var(--accent-soft),0 0 18px rgba(255,138,61,.25)}
+.node.done .bub{border-color:var(--teal);color:var(--teal)}
+.node .nm{font-size:12px;font-weight:600;color:var(--text-2)}
+.node.on .nm{color:var(--text)}
+.node .ct{font-size:10px;font-family:var(--mono);color:var(--text-3);white-space:nowrap}
+.node.on .ct{color:var(--accent)}
+.handoff{position:absolute;top:11px;font-size:10px;color:var(--text-3);background:var(--panel);
+  border:1px solid var(--line);padding:2px 8px;border-radius:9px;font-family:var(--mono);z-index:1;white-space:nowrap}
+.handoff b{color:var(--teal)}
+/* 阶段 */
+.stage{display:grid;grid-template-rows:1fr 96px;min-height:0}
+.gridwrap{overflow-y:auto;padding:14px 16px;position:relative}
+.gl-bar{display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:11.5px;color:var(--text-3)}
+.gl-bar .sel{color:var(--accent)}
+.gd{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:11px}
+.cell{background:var(--panel);border:1.6px solid var(--line);border-radius:10px;overflow:hidden;cursor:pointer;position:relative}
+.cell:hover{border-color:var(--line-strong)}
+.cell.sel{border-color:var(--accent)}
+.cell .im{height:108px;background:linear-gradient(135deg,#1B2226,#11171B);position:relative;display:flex;align-items:center;justify-content:center}
+.cell .im svg{width:66px;height:66px}
+.cell .st{position:absolute;top:6px;right:6px;width:8px;height:8px;border-radius:50%}
+.cell .st.ok{background:var(--ok)}.cell .st.wn{background:var(--warn)}.cell .st.ns{background:#3A474D}
+.cell .no{position:absolute;top:5px;left:7px;font-family:var(--mono);font-size:9px;color:rgba(234,241,242,.5)}
+.cell .bar{height:22px;display:flex;align-items:center;gap:6px;padding:0 8px;font-size:10.5px;border-top:1px solid var(--line)}
+.cell .bar i{width:8px;height:8px;border-radius:2.5px}
+.cell .bar b{color:var(--text-2);font-weight:600}
+.cell .bar .ck{margin-left:auto;color:var(--ok);font-size:9.5px}
+.cell .bar .pd{margin-left:auto;color:var(--warn);font-size:9.5px}
+/* 底部类别条 */
+.clsbar{background:var(--panel);border-top:1px solid var(--line);display:flex;align-items:center;gap:10px;padding:0 18px}
+.cb-h{font-size:10px;font-weight:700;letter-spacing:.14em;color:var(--text-3)}
+.clsbtn{display:flex;align-items:center;gap:8px;height:38px;padding:0 16px;border-radius:10px;border:1px solid var(--line-strong);
+  background:var(--panel-2);cursor:pointer;font-size:13px;color:var(--text-2)}
+.clsbtn .num{font-family:var(--mono);font-size:9.5px;color:var(--text-3);border:1px solid var(--line-strong);border-radius:4px;padding:1px 5px}
+.clsbtn .sw{width:11px;height:11px;border-radius:3px}
+.clsbtn .cnt{font-family:var(--mono);font-size:10.5px;color:var(--text-3)}
+.clsbtn:hover{color:var(--text);border-color:var(--accent)}
+.clsbtn.add{color:var(--text-3);border-style:dashed;background:transparent}
+.batchops{margin-left:auto;display:flex;gap:8px;align-items:center}
+.bbtn{height:30px;padding:0 12px;border-radius:8px;border:1px solid var(--line-strong);background:var(--panel-2);
+  color:var(--text-2);font-size:11.5px;cursor:pointer}
+.bbtn:hover{color:var(--text);border-color:var(--accent)}
+.bbtn.warn:hover{color:var(--warn);border-color:var(--warn)}
+.bbtn.danger:hover{color:var(--bad);border-color:var(--bad)}
+.hand-card{position:absolute;right:18px;top:14px;width:238px;background:rgba(18,25,28,.94);
+  border:1px solid var(--line-strong);border-radius:12px;padding:13px 14px;backdrop-filter:blur(8px);z-index:5}
+.hand-card .hc-h{font-size:10px;font-weight:700;letter-spacing:.14em;color:var(--text-3);margin-bottom:8px}
+.hand-card .hc-num{font-family:var(--mono);font-size:26px;font-weight:700;color:var(--teal);line-height:1}
+.hand-card .hc-num small{font-size:12px;color:var(--text-3);font-weight:400}
+.hand-card p{font-size:11.5px;color:var(--text-2);margin:7px 0 11px;line-height:1.5}
+.hcta{height:32px;border-radius:8px;border:none;background:var(--accent);color:#1A0E04;font-weight:700;font-size:12.5px;width:100%;cursor:pointer}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="header">
+    <div class="hd-row">
+      <div class="brand">
+        <svg width="26" height="26" viewBox="0 0 26 26"><circle cx="13" cy="13" r="11" fill="none" stroke="#2E3E44" stroke-width="2"/><circle cx="13" cy="13" r="6.5" fill="none" stroke="#FF8A3D" stroke-width="2"/><circle cx="13" cy="13" r="2" fill="#FF8A3D"/></svg>
+        <div><b>Demo-cs</b> <small>classify · 10,028 张 · ImageFolder 兼容</small></div>
+      </div>
+      <div class="hd-right">
+        <span class="gpill"><span class="d"></span>CUDA:0 · 空闲</span>
+        <span class="gpill" style="color:var(--text)">⌘K 命令</span>
+      </div>
+    </div>
+    <div class="pipe">
+      <svg class="wire" viewBox="0 0 1400 98" preserveAspectRatio="none">
+        <path class="flow" d="M 163 20 C 240 20, 300 20, 374 20"/>
+        <path d="M 451 20 C 520 20, 590 20, 662 20"/>
+        <path d="M 738 20 C 810 20, 880 20, 950 20"/>
+        <path d="M 1026 20 C 1100 20, 1160 20, 1237 20"/>
+        <path d="M 1275 46 C 1275 92, 125 92, 125 46" stroke-dasharray="3 6"/>
+      </svg>
+      <span class="handoff" style="left:478px"><b>9,640</b> 张已确认可训练</span>
+      <div class="nodes">
+        <div class="node done">
+          <span class="bub"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg></span>
+          <span class="nm">数据</span><span class="ct">10,028 张</span>
+        </div>
+        <div class="node on">
+          <span class="bub"><svg viewBox="0 0 24 24"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg></span>
+          <span class="nm">标注</span><span class="ct">9,640 ✓ · 388 待确认</span>
+        </div>
+        <div class="node">
+          <span class="bub"><svg viewBox="0 0 24 24"><path d="M3 17l5-6 4 4 6-8 3 4"/><path d="M3 21h18"/></svg></span>
+          <span class="nm">训练</span><span class="ct">分类任务 · top-1 0.923</span>
+        </div>
+        <div class="node">
+          <span class="bub"><svg viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg></span>
+          <span class="nm">模型</span><span class="ct">2 个 · cats/dogs/rabbits</span>
+        </div>
+        <div class="node">
+          <span class="bub"><svg viewBox="0 0 24 24"><path d="M12 3v12M8 11l4 4 4-4M4 21h16"/></svg></span>
+          <span class="nm">导出部署</span><span class="ct">ImageFolder / CSV</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <section class="stage">
+    <div class="gridwrap">
+      <div class="hand-card">
+        <div class="hc-h">阶段交接 · 标注 → 训练</div>
+        <div class="hc-num">9,640 <small>/ 10,028 已确认</small></div>
+        <p>388 张待确认（多为自动标注）。数字键打标即确认。</p>
+        <button class="hcta">用 9,640 张启动训练 →</button>
+      </div>
+      <div class="gl-bar">
+        <span>筛选：</span><span>全部</span><span>·</span><span>所有类别</span><span>·</span><span>排序 按文件名</span>
+        <span class="sel" style="margin-left:14px">已选 3 张</span>
+        <span style="margin-left:auto">数字键 1-3 打标 · ⌫ 清除 · Delete 删除（二次确认）</span>
+      </div>
+      <div class="gd">
+        <div class="cell"><div class="im"><svg viewBox="0 0 66 66"><circle cx="33" cy="35" r="16" fill="#8A93A5"/><circle cx="27" cy="31" r="2.5" fill="#12161D"/><circle cx="39" cy="31" r="2.5" fill="#12161D"/><path d="M29 40c2 2 6 2 8 0" stroke="#12161D" stroke-width="1.6" fill="none"/><path d="M21 23l4-7 5 5M45 23l-4-7-5 5" fill="#8A93A5"/></svg><span class="st ok"></span><span class="no">0231</span></div><div class="bar"><i style="background:#4D9FFF"></i><b>cats</b><span class="ck">✓ manual</span></div></div>
+        <div class="cell"><div class="im"><svg viewBox="0 0 66 66"><ellipse cx="33" cy="37" rx="17" ry="14" fill="#A98B62"/><circle cx="26" cy="33" r="2.5" fill="#12161D"/><circle cx="40" cy="33" r="2.5" fill="#12161D"/><ellipse cx="33" cy="41" rx="4" ry="3" fill="#12161D"/><path d="M19 23c2-6 8-8 10-4M47 23c-2-6-8-8-10-4" stroke="#A98B62" stroke-width="4" fill="none" stroke-linecap="round"/></svg><span class="st ok"></span><span class="no">0232</span></div><div class="bar"><i style="background:#F5C043"></i><b>dogs</b><span class="ck">✓ auto</span></div></div>
+        <div class="cell sel"><div class="im"><svg viewBox="0 0 66 66"><circle cx="33" cy="35" r="16" fill="#C48A5A"/><circle cx="27" cy="31" r="2.5" fill="#12161D"/><circle cx="39" cy="31" r="2.5" fill="#12161D"/><path d="M29 40c2 2 6 2 8 0" stroke="#12161D" stroke-width="1.6" fill="none"/><path d="M23 21l-2-8 7 4M43 21l2-8-7 4" fill="#C48A5A"/></svg><span class="st wn"></span><span class="no">0233</span></div><div class="bar"><i style="background:#4D9FFF"></i><b>cats</b><span class="pd">待确认</span></div></div>
+        <div class="cell"><div class="im"><svg viewBox="0 0 66 66"><ellipse cx="33" cy="37" rx="17" ry="14" fill="#7E8B9C"/><circle cx="26" cy="33" r="2.5" fill="#12161D"/><circle cx="40" cy="33" r="2.5" fill="#12161D"/><ellipse cx="33" cy="41" rx="4" ry="3" fill="#12161D"/></svg><span class="st wn"></span><span class="no">0234</span></div><div class="bar"><i style="background:#F5C043"></i><b>dogs</b><span class="pd">待确认</span></div></div>
+        <div class="cell"><div class="im"><svg viewBox="0 0 66 66"><circle cx="33" cy="35" r="15" fill="#9AA5B5"/><circle cx="27" cy="32" r="2.5" fill="#12161D"/><circle cx="39" cy="32" r="2.5" fill="#12161D"/><path d="M29 39c2 2 6 2 8 0" stroke="#12161D" stroke-width="1.6" fill="none"/><path d="M21 23l4-7 5 5M45 23l-4-7-5 5" fill="#9AA5B5"/></svg><span class="st ns"></span><span class="no">0235</span></div><div class="bar"><i style="background:#3A474D"></i><b>未分类</b></div></div>
+        <div class="cell"><div class="im"><svg viewBox="0 0 66 66"><ellipse cx="33" cy="37" rx="16" ry="13" fill="#B09268"/><circle cx="27" cy="34" r="2.5" fill="#12161D"/><circle cx="39" cy="34" r="2.5" fill="#12161D"/><ellipse cx="33" cy="41" rx="4" ry="3" fill="#12161D"/><path d="M15 37c2 6 8 8 10 6M51 37c-2 6-8 8-10 6" stroke="#B09268" stroke-width="3.4" fill="none" stroke-linecap="round"/></svg><span class="st ok"></span><span class="no">0236</span></div><div class="bar"><i style="background:#3ECF8E"></i><b>rabbits</b><span class="ck">✓ auto</span></div></div>
+        <div class="cell"><div class="im"><svg viewBox="0 0 66 66"><circle cx="33" cy="35" r="16" fill="#8A93A5"/><circle cx="27" cy="31" r="2.5" fill="#12161D"/><circle cx="39" cy="31" r="2.5" fill="#12161D"/><path d="M29 40c2 2 6 2 8 0" stroke="#12161D" stroke-width="1.6" fill="none"/><path d="M21 23l4-7 5 5M45 23l-4-7-5 5" fill="#8A93A5"/></svg><span class="st ok"></span><span class="no">0237</span></div><div class="bar"><i style="background:#4D9FFF"></i><b>cats</b><span class="ck">✓ manual</span></div></div>
+        <div class="cell"><div class="im"><svg viewBox="0 0 66 66"><ellipse cx="33" cy="37" rx="17" ry="14" fill="#A98B62"/><circle cx="26" cy="33" r="2.5" fill="#12161D"/><circle cx="40" cy="33" r="2.5" fill="#12161D"/><ellipse cx="33" cy="41" rx="4" ry="3" fill="#12161D"/></svg><span class="st ns"></span><span class="no">0238</span></div><div class="bar"><i style="background:#3A474D"></i><b>未分类</b></div></div>
+      </div>
+    </div>
+
+    <div class="clsbar">
+      <span class="cb-h">类别</span>
+      <div class="clsbtn"><span class="num">1</span><span class="sw" style="background:#4D9FFF"></span>cats<span class="cnt">6,213</span></div>
+      <div class="clsbtn"><span class="num">2</span><span class="sw" style="background:#F5C043"></span>dogs<span class="cnt">3,427</span></div>
+      <div class="clsbtn"><span class="num">3</span><span class="sw" style="background:#3ECF8E"></span>rabbits<span class="cnt">388</span></div>
+      <div class="clsbtn add">＋ 添加类别</div>
+      <div class="batchops">
+        <button class="bbtn">全选可见 ⌘A</button>
+        <button class="bbtn">反选</button>
+        <button class="bbtn">确认全部</button>
+        <button class="bbtn warn">清除类别 ⌫</button>
+        <button class="bbtn danger">删除图片</button>
+      </div>
+    </div>
+  </section>
+</div>
+<script>
+document.querySelectorAll('.node').forEach(n=>n.addEventListener('click',()=>{
+  if(!n.classList.contains('on')){document.querySelectorAll('.node').forEach(x=>x.classList.remove('on'));n.classList.add('on');}
+}));
+document.querySelectorAll('.cell').forEach(c=>c.addEventListener('click',()=>c.classList.toggle('sel')));
+</script>
+</body>
+</html>

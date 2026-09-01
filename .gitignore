@@ -49,3 +49,6 @@ config/train_templates.json
 .idea/
 .DS_Store
 Thumbs.db
+
+# Node.js
+node_modules/

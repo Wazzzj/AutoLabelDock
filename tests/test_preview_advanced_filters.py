@@ -119,8 +119,14 @@ def test_detection_control_counts_enabled_box_properties():
     assert advanced_filter.active_count() == 2
 
 
+_APP = None
+
+
 def _qapp():
-    return QApplication.instance() or QApplication([])
+    global _APP
+    if _APP is None:
+        _APP = QApplication.instance() or QApplication([])
+    return _APP
 
 
 def test_range_fields_stay_editable_and_editing_enables_condition():

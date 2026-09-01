@@ -103,7 +103,8 @@ COCO17_SKELETON_EDGES: tuple[tuple[int, int], ...] = (
 # yellow-green limbs and vivid magenta keypoints.
 COCO17_SKELETON_RGB = (224, 255, 41)
 COCO17_KEYPOINT_RGB = (254, 100, 218)
-POSE_BOUNDING_BOX_RGB = (124, 92, 255)
+# Deep-sea blue theme pose bounding-box color (was legacy violet).
+POSE_BOUNDING_BOX_RGB = (59, 130, 246)
 
 
 def _keypoint_skeleton_edges(count: int) -> tuple[tuple[int, int], ...]:

@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AutoLabel Dock · UI 重设计原型总览（A / B 全页面）</title>
+<style>
+:root{
+  --bg:#0B0E13;--panel:#11161F;--line:#1F2937;--line-2:#2C3A50;
+  --text:#E9EEF6;--text-2:#9AA9BF;--text-3:#5D6C84;
+  --a:#4D9FFF;--b:#FF8A3D;--c:#35E0C8;
+  --mono:"SF Mono",ui-monospace,Menlo,monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,"PingFang SC","Noto Sans SC",sans-serif;
+  font-size:14px;-webkit-font-smoothing:antialiased;padding:0 0 70px}
+.wrap{max-width:1420px;margin:0 auto;padding:0 28px}
+header.hero{padding:52px 0 30px;border-bottom:1px solid var(--line)}
+.eyebrow{font-size:11px;font-weight:700;letter-spacing:.22em;color:var(--text-3);margin-bottom:14px}
+h1{font-size:29px;font-weight:700;margin-bottom:14px}
+h1 em{font-style:normal;color:var(--a)}
+.lede{color:var(--text-2);font-size:14.5px;line-height:1.75;max-width:980px}
+.lede b{color:var(--text)}
+.now{margin-top:20px;padding:14px 18px;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+  font-size:12.5px;color:var(--text-2);line-height:1.7;display:flex;gap:18px}
+.now .t{font-size:10.5px;font-weight:700;letter-spacing:.16em;color:var(--text-3);flex-shrink:0;padding-top:2px}
+.now b{color:var(--text)}
+
+.schemeh{display:flex;align-items:center;gap:12px;margin:44px 0 6px}
+.schemeh .dot{width:11px;height:11px;border-radius:50%}
+.schemeh h2{font-size:20px}
+.schemeh .en{font-size:10.5px;color:var(--text-3);font-family:var(--mono);letter-spacing:.12em}
+.schemeh .note{margin-left:auto;font-size:12px;color:var(--text-3)}
+.schemed{color:var(--text-2);font-size:12.5px;line-height:1.7;margin:8px 0 16px;max-width:1100px}
+.schemed b{color:var(--text)}
+
+.pgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:18px}
+.pcard{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden;display:flex;flex-direction:column;
+  transition:border-color .2s}
+.pcard:hover{border-color:var(--line-2)}
+.shot{position:relative;height:208px;overflow:hidden;border-bottom:1px solid var(--line);cursor:pointer}
+.shot iframe{width:1440px;height:900px;transform:scale(0.2465);transform-origin:0 0;border:0;pointer-events:none;position:absolute;top:0;left:0}
+.shot .open{position:absolute;right:9px;bottom:9px;font-size:10.5px;background:rgba(9,12,17,.85);border:1px solid var(--line-2);
+  border-radius:6px;padding:3px 9px;color:var(--text-2);opacity:0;transition:opacity .15s}
+.pcard:hover .open{opacity:1}
+.pb{padding:12px 14px 14px}
+.pb .pt{display:flex;align-items:center;gap:8px;font-size:13.5px;font-weight:600;margin-bottom:6px}
+.pb .pt .nn{font-family:var(--mono);font-size:9.5px;color:var(--text-3);border:1px solid var(--line);border-radius:4px;padding:1px 5px;margin-left:auto}
+.pb p{font-size:11.5px;color:var(--text-2);line-height:1.6}
+.pb p b{color:var(--text)}
+
+.foot{margin-top:44px;padding:22px 26px;background:var(--panel);border:1px solid var(--line);border-radius:14px}
+.foot h3{font-size:15px;margin-bottom:10px}
+.foot p{font-size:12.5px;color:var(--text-2);line-height:1.85;max-width:1050px}
+.foot p b{color:var(--text)}
+.foot .cnote{margin-top:10px;color:var(--text-3);font-size:11.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="eyebrow">AUTOLABEL DOCK · UI 结构重设计 · 两方案 × 全页面</div>
+    <h1>两套骨架，<em>每个页面</em>都有设计稿</h1>
+    <p class="lede">在「统一工作台」与「训练流水线」两个方向上，把现有程序的<b>每个页面</b>（主页 / 标注 / 分类 / 预览 / 训练 / 模型 / 小工具）都重画了一遍。
+    所有功能点均对照 <b>FEATURE_INVENTORY.md</b> 清单落位；示例数据沿用真实领域场景（胶环密封检测 · cats-dogs 分类）。点击任意卡片打开可交互大图。</p>
+    <div class="now"><span class="t">现状参照</span>
+      <span>六个平铺页签平级并列，<b>闭环关系不可见</b>；标注三栏常驻挤压画布；训练与标注割裂；批量任务 / GPU / 队列状态<b>无法跨页感知</b>。</span>
+    </div>
+  </header>
+
+  <!-- ═══════════ 方案 A ═══════════ -->
+  <div class="schemeh"><span class="dot" style="background:var(--a)"></span><h2>方案 A · 统一工作台</h2>
+    <span class="en">WORKBENCH</span>
+    <span class="note">Qt 落地成本最低 · QToolBar + QDockWidget · 面板内控件大多保留</span></div>
+  <p class="schemed"><b>骨架</b>：左侧 56px 图标导航栏（徽标计数）+ 顶部项目切换器与 ⌘K 命令搜索 + 右侧上下文检查器 + <b>底部常驻任务条</b>（训练 / 批量进度任何页面可见）。签名元素：导航栏底部「闭环进度环」。</p>
+  <div class="pgrid">
+    <div class="pcard"><div class="shot" onclick="window.open('a-home.html')"><iframe src="a-home.html" scrolling="no" loading="lazy" tabindex="-1"></iframe><span class="open">打开 ↗</span></div>
+      <div class="pb"><div class="pt">主页<span class="nn">a-home</span></div><p><b>最近项目卡片</b>：任务类型 / 图片数 / 最佳指标 / 闭环进度条；右侧快速开始与快捷键。替代原"欢迎"页签。</p></div></div>
+    <div class="pcard"><div class="shot" onclick="window.open('a-workbench.html')"><iframe src="a-workbench.html" scrolling="no" loading="lazy" tabindex="-1"></iframe><span class="open">打开 ↗</span></div>
+      <div class="pb"><div class="pt">标注 · detect/seg/obb/pose<span class="nn">a-workbench</span></div><p>三栏骨架保留但重组：<b>画布获得最大空间</b>；标注列表 / 类别 / 数据版本 / Tag 收进右侧检查器；seg、obb、pose 仅工具激活态不同。</p></div></div>
+    <div class="pcard"><div class="shot" onclick="window.open('a-classify.html')"><iframe src="a-classify.html" scrolling="no" loading="lazy" tabindex="-1"></iframe><span class="open">打开 ↗</span></div>
+      <div class="pb"><div class="pt">标注 · 分类变体<span class="nn">a-classify</span></div><p><b>数字键类别按钮条</b>提到顶部工具栏；缩略网格 + 状态角标 + 类别色条；检查器承载批量打标 / 类别分布 / Tag。</p></div></div>
+    <div class="pcard"><div class="shot" onclick="window.open('a-preview.html')"><iframe src="a-preview.html" scrolling="no" loading="lazy" tabindex="-1"></iframe><span class="open">打开 ↗</span></div>
+      <div class="pb"><div class="pt">预览<span class="nn">a-preview</span></div><p>状态 / 类别 / 版本 / Tag 筛选 + <b>标注卡控规则面板</b>（宽高 / 面积 / 置信度 / 中心）+ ROI 工具 + OK/NG 徽标 + 双图导出。</p></div></div>
+    <div class="pcard"><div class="shot" onclick="window.open('a-train.html')"><iframe src="a-train.html" scrolling="no" loading="lazy" tabindex="-1"></iframe><span class="open">打开 ↗</span></div>
+      <div class="pb"><div class="pt">训练<span class="nn">a-train</span></div><p>左参数列（折叠组 / 模板 / 增强预览）+ <b>Loss 与 mAP 实时曲线</b> + epoch 日志流；检查器承载数据筛选与串行队列。</p></div></div>
+    <div class="pcard"><div class="shot" onclick="window.open('a-models.html')"><iframe src="a-models.html" scrolling="no" loading="lazy" tabindex="-1"></iframe><span class="open">打开 ↗</span></div>
+      <div class="pb"><div class="pt">模型<span class="nn">a-models</span></div><p><b>注册表行卡</b>：指标条形对比 + 推理/删除操作；加载 / 重命名 / 导入 / 导出 PT·ONNX 保留（原型中为顶栏按钮）。</p></div></div>
+    <div class="pcard"><div class="shot" onclick="window.open('a-tools.html')"><iframe src="a-tools.html" scrolling="no" loading="lazy" tabindex="-1"></iframe><span class="open">打开 ↗</span></div>
+      <div class="pb"><div class="pt">小工具<span class="nn">a-tools</span></div><p><b>工具列表 + 脚本编辑器 + 终端输出</b>三段式；运行配置（数据版本）在检查器；执行状态进底部任务条。</p></div></div>
+    <div class="pcard" style="border-style:dashed;background:transparent;min-height:120px;display:flex;align-items:center;justify-content:center;color:var(--text-3);font-size:12px">
+      检查器随页面切换上下文<br>（标注=标注列表 / 训练=队列 / 预览=卡控）</div>
+  </div>
+
+  <!-- ═══════════ 方案 B ═══════════ -->
+  <div class="schemeh"><span class="dot" style="background:var(--b)"></span><h2>方案 B · 训练流水线</h2>
+    <span class="en">PIPELINE</span>
+    <span class="note">产品故事最强 · 自绘 stepper 部件 · 各页重排</span></div>
+  <p class="schemed"><b>骨架</b>：顶部「数据 → 标注 → 训练 → 模型 → 导出部署」<b>流动流水线</b>即导航，节点携带实时计数，节点间显式交接物（"967 张已确认可训练"）；虚线回路表达迭代闭环。每个节点是全屏工作区。小工具并入"导出部署"阶段（含脚本工具）。</p>
+  <div class="pgrid">
+    <div class="pcard"><div class="shot" onclick="window.open('b-pipeline.html')"><iframe src="b-pipeline.html" scrolling="no" loading="lazy" tabindex="-1"></iframe><span class="open">打开 ↗</span></div>
+      <div class="pb"><div class="pt">标注<span class="nn">b-pipeline</span></div><p><b>左缘胶片条</b> + 全宽画布 + 右下阶段交接卡（967 已确认 → 一键去训练）；工具浮在画布右上。</p></div></div>
+    <div class="pcard"><div class="shot" onclick="window.open('b-classify.html')"><iframe src="b-classify.html" scrolling="no" loading="lazy" tabindex="-1"></iframe><span class="open">打开 ↗</span></div>
+      <div class="pb"><div class="pt">标注 · 分类变体<span class="nn">b-classify</span></div><p>网格 + <b>底部类别按钮条</b>（1-3 数字键）；批量操作（全选 / 确认全部 / 清除 / 删除）在条右侧；交接卡指向训练。</p></div></div>
+    <div class="pcard"><div class="shot" onclick="window.open('b-data.html')"><iframe src="b-data.html" scrolling="no" loading="lazy" tabindex="-1"></iframe><span class="open">打开 ↗</span></div>
+      <div class="pb"><div class="pt">数据（预览 / 卡控）<span class="nn">b-data</span></div><p>现有"预览页"重定位为流水线源头：<b>筛选 + 卡控规则 + ROI</b> 在左栏，OK/NG 网格在右，交接卡"86 张未标注 → 去标注"。</p></div></div>
+    <div class="pcard"><div class="shot" onclick="window.open('b-train.html')"><iframe src="b-train.html" scrolling="no" loading="lazy" tabindex="-1"></iframe><span class="open">打开 ↗</span></div>
+      <div class="pb"><div class="pt">训练<span class="nn">b-train</span></div><p>参数抽屉 + <b>Loss / mAP 大图</b> + 串行队列时间线 + epoch 日志流（events.jsonl 子进程）；LIVE 节点脉冲。</p></div></div>
+    <div class="pcard"><div class="shot" onclick="window.open('b-models.html')"><iframe src="b-models.html" scrolling="no" loading="lazy" tabindex="-1"></iframe><span class="open">打开 ↗</span></div>
+      <div class="pb"><div class="pt">模型<span class="nn">b-models</span></div><p><b>指标卡 + 版本谱系</b>（v1→v4 演进与各代 mAP）；右栏操作：用于预标注 / 批量推理 / 导出 PT·ONNX。</p></div></div>
+    <div class="pcard"><div class="shot" onclick="window.open('b-tools.html')"><iframe src="b-tools.html" scrolling="no" loading="lazy" tabindex="-1"></iframe><span class="open">打开 ↗</span></div>
+      <div class="pb"><div class="pt">导出部署（含小工具）<span class="nn">b-tools</span></div><p>三栏：<b>9 种格式数据集导出</b> + 模型部署（ONNX / 目录推理 / 导入回灌）+ 脚本工具（编辑 / 执行 / 输出）。</p></div></div>
+    <div class="pcard" style="border-style:dashed;background:transparent;min-height:120px;display:flex;align-items:center;justify-content:center;color:var(--text-3);font-size:12px">
+      主页职能由品牌区 + 项目切换承担<br>（未打开项目时显示项目选择流）</div>
+  </div>
+
+  <div class="foot">
+    <h3>选型建议</h3>
+    <p><b>A 稳、B 亮，且可杂交。</b>A 改动面最小（壳层重构、面板内保留），适合先落地；B 把闭环讲得最清楚，适合对外演示。两套不互斥——常见杂交是 <b>A 的骨架 + B 的流水线顶栏</b>（把图标导航换成阶段条）。</p>
+    <p><b>功能完整性</b>：每个页面落位均对照 <b>FEATURE_INVENTORY.md</b> 的 14 区块 ~180 项清单；两份已知待决点——小工具在方案 B 中的归属（现定"导出部署"阶段）、⌘K 命令面板为新增功能（非旧功能迁移）。</p>
+    <p class="cnote">方案 C（沉浸画布）已按要求排除，c-focus-canvas.html 仅作存档保留。原型为纯 HTML 静态稿，数据为示例项目。</p>
+  </div>
+</div>
+</body>
+</html>

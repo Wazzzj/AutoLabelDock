@@ -10,7 +10,7 @@ import logging
 from collections import OrderedDict
 from pathlib import Path
 
-from PyQt5.QtCore import Qt, pyqtSignal, QPoint
+from PyQt5.QtCore import Qt, pyqtSignal, QPoint, QSize
 from PyQt5.QtGui import QCursor
 from PyQt5.QtWidgets import (
     QAbstractItemView,
@@ -19,6 +19,7 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QSplitter,
     QPushButton,
+    QToolButton,
     QToolBar,
     QLabel,
     QMessageBox,
@@ -45,6 +46,30 @@ from src.utils.image import get_image_size, ImageCache
 from src.utils.undo import UndoStack
 
 logger = logging.getLogger(__name__)
+
+
+class _CanvasPane(QWidget):
+    """画布容器：HUD 悬浮层钉在左上角，随尺寸自适应。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._overlay = None
+
+    def set_overlay(self, widget: QWidget) -> None:
+        self._overlay = widget
+        widget.setParent(self)
+        widget.show()
+        widget.raise_()
+        self._place_overlay()
+
+    def _place_overlay(self) -> None:
+        if self._overlay is not None:
+            self._overlay.adjustSize()
+            self._overlay.move(14, 10)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._place_overlay()
 
 
 class DetectPoseView(TaskView):
@@ -89,31 +114,38 @@ class DetectPoseView(TaskView):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        # View-local toolbar: drawing tools + per-image / per-visible confirm actions
-        self._toolbar = QToolBar()
-        self._toolbar.setMovable(False)
+        # View-local tool strip（设计稿：由 LabelPanel 注入顶部单行工具栏）
+        self._tools_strip = QWidget()
+        self._tools_strip.setObjectName("viewToolsStrip")
+        strip_lay = QHBoxLayout(self._tools_strip)
+        strip_lay.setContentsMargins(0, 0, 0, 0)
+        strip_lay.setSpacing(6)
+        self._tools_strip.setStyleSheet(
+            "#viewToolsStrip QPushButton{background:transparent;"
+            "border:1px solid transparent;border-radius:8px;padding:0 14px;"
+            "color:" + PALETTE["text_muted"] + ";font-weight:600;}"
+            "#viewToolsStrip QPushButton:checked{background:"
+            + PALETTE["primary_soft"] + ";color:" + PALETTE["primary"] + ";}"
+            "#viewToolsStrip QPushButton:hover{color:" + PALETTE["text"]
+            + ";background:" + PALETTE["panel"] + ";}"
+        )
 
-        self._btn_select = QPushButton(icon("cursor"), "移动")
+        self._btn_select = QPushButton(icon("cursor"), "移动  V")
         self._btn_select.setCheckable(True)
         self._btn_select.setChecked(True)
         self._btn_select.setToolTip("选择/移动工具 (V)")
-        set_button_role(self._btn_select, "secondary")
-        self._btn_bbox = QPushButton(icon("bbox"), "矩形框")
+        self._btn_bbox = QPushButton(icon("bbox"), "矩形框  W")
         self._btn_bbox.setCheckable(True)
         self._btn_bbox.setToolTip("绘制矩形框 (W)")
-        set_button_role(self._btn_bbox, "secondary")
-        self._btn_polygon = QPushButton(icon("polygon"), "多边形")
+        self._btn_polygon = QPushButton(icon("polygon"), "多边形  P")
         self._btn_polygon.setCheckable(True)
         self._btn_polygon.setToolTip("绘制多边形掩膜 (P)")
-        set_button_role(self._btn_polygon, "secondary")
-        self._btn_obb = QPushButton(icon("obb"), "旋转框")
+        self._btn_obb = QPushButton(icon("obb"), "旋转框  O")
         self._btn_obb.setCheckable(True)
         self._btn_obb.setToolTip("拖动绘制旋转框，完成后可旋转 (O)")
-        set_button_role(self._btn_obb, "secondary")
-        self._btn_keypoint = QPushButton(icon("keypoint"), "关键点")
+        self._btn_keypoint = QPushButton(icon("keypoint"), "关键点  K")
         self._btn_keypoint.setCheckable(True)
         self._btn_keypoint.setToolTip("绘制关键点 (K)")
-        set_button_role(self._btn_keypoint, "secondary")
 
         for btn in [
             self._btn_select,
@@ -122,22 +154,26 @@ class DetectPoseView(TaskView):
             self._btn_obb,
             self._btn_keypoint,
         ]:
-            btn.setMinimumWidth(80)
-            self._toolbar.addWidget(btn)
+            btn.setMinimumWidth(72)
+            btn.setFixedHeight(30)
+            strip_lay.addWidget(btn)
 
-        self._toolbar.addSeparator()
+        sep = QLabel()
+        sep.setFixedWidth(1)
+        sep.setFixedHeight(20)
+        sep.setStyleSheet(f"background:{PALETTE['line_strong']};")
+        strip_lay.addWidget(sep)
+        strip_lay.addSpacing(8)
 
-        self._btn_confirm_visible = QPushButton(icon("confirm_visible"), "确认可见标注")
-        self._btn_confirm_visible.setToolTip("确认当前可见图片的所有未确认标注 (Ctrl+Space)")
-        set_button_role(self._btn_confirm_visible, "primary")
-        self._toolbar.addWidget(self._btn_confirm_visible)
+        self._btn_confirm_visible = QPushButton(icon("confirm_visible"), "确认本图")
+        self._btn_confirm_visible.setToolTip("确认当前图片的所有未确认标注 (Ctrl+Space)")
+        self._btn_confirm_visible.setFixedHeight(30)
+        strip_lay.addWidget(self._btn_confirm_visible)
 
         self._btn_revert_visible = QPushButton(icon("revert_visible"), "撤销可见预标注")
-        self._btn_revert_visible.setToolTip("删除当前可见图片的所有未确认标注")
-        set_button_role(self._btn_revert_visible, "danger")
-        self._toolbar.addWidget(self._btn_revert_visible)
-
-        layout.addWidget(self._toolbar)
+        self._btn_revert_visible.setToolTip("删除当前图片的所有未确认标注")
+        self._btn_revert_visible.setFixedHeight(30)
+        # 设计稿不常驻：由 LabelPanel 的“更多”菜单触发
 
         # Splitter: file_list | canvas | properties
         self._splitter = QSplitter(Qt.Horizontal)
@@ -171,6 +207,7 @@ class DetectPoseView(TaskView):
             """
         )
         left_pane = QWidget()
+        self._left_pane = left_pane
         left_layout = QVBoxLayout(left_pane)
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(6)
@@ -192,18 +229,20 @@ class DetectPoseView(TaskView):
         self._data_tree = QTreeWidget()
         self._data_tree.setHeaderHidden(True)
         self._data_tree.setObjectName("dataFolderTree")
+        self._data_tree.setFocusPolicy(Qt.NoFocus)
 
         tree_closed_icon = stylesheet_url(TREE_CLOSED_SVG)
         tree_open_icon = stylesheet_url(TREE_OPEN_SVG)
         self._data_tree.setStyleSheet(
             "QTreeWidget#dataFolderTree {"
-            " show-decoration-selected: 1;"
+            " border: none; outline: none;"
+            " show-decoration-selected: 0;"
             "}"
             "QTreeWidget#dataFolderTree::item {"
             " min-height: 28px;"
             " padding: 5px 8px;"
             " margin: 0px;"
-            " border: none;"
+            " border: none; border-left: none;"
             "}"
             "QTreeWidget#dataFolderTree::item:hover {"
             " background-color: transparent;"
@@ -214,11 +253,12 @@ class DetectPoseView(TaskView):
             "}"
             "QTreeWidget#dataFolderTree::item:selected,"
             "QTreeWidget#dataFolderTree::item:selected:hover {"
-            f" background-color: {PALETTE['primary_soft']};"
+            " background-color: transparent;"
             f" color: {PALETTE['text']};"
             " padding: 5px 8px;"
             " margin: 0px;"
             " border: none;"
+            " outline: none;"
             "}"
             "QTreeWidget#dataFolderTree::branch {"
             " width: 18px;"
@@ -248,17 +288,96 @@ class DetectPoseView(TaskView):
 
         self._canvas = AnnotationCanvas()
         self._canvas.setMinimumSize(420, 320)
-        self._splitter.addWidget(self._canvas)
+
+        # 画布容器：HUD 悬浮层（左上） + 画布 + 缩放胶囊（下）
+        self._canvas_container = _CanvasPane()
+        cc_layout = QVBoxLayout(self._canvas_container)
+        cc_layout.setContentsMargins(0, 0, 0, 0)
+        cc_layout.setSpacing(6)
+
+        chip_css = (
+            f"background:rgba(16,22,35,0.92);border:1px solid {PALETTE['line']};"
+            f"border-radius:7px;padding:4px 10px;color:{PALETTE['text_muted']};"
+            "font-size:11.5px;")
+        self._hud_overlay = QWidget(self._canvas_container)
+        hud_row = QHBoxLayout(self._hud_overlay)
+        hud_row.setContentsMargins(0, 0, 0, 0)
+        hud_row.setSpacing(8)
+        self._hud_file = QLabel("无图片")
+        self._hud_file.setStyleSheet(chip_css)
+        self._hud_counts = QLabel("标注 0 · 待确认 0")
+        self._hud_counts.setStyleSheet(chip_css)
+        self._hud_model = QLabel("")
+        self._hud_model.setStyleSheet(chip_css)
+        self._hud_model.hide()
+        hud_row.addWidget(self._hud_file)
+        hud_row.addWidget(self._hud_counts)
+        hud_row.addWidget(self._hud_model)
+        hud_row.addStretch(1)
+
+        cc_layout.addWidget(self._canvas, 1)
+        self._canvas_container.set_overlay(self._hud_overlay)
+
+        zoom_row = QHBoxLayout()
+        zoom_row.addStretch(1)
+        self._zoom_pill = QWidget()
+        self._zoom_pill.setObjectName("zoomPill")
+        self._zoom_pill.setStyleSheet(
+            f"#zoomPill{{background:{PALETTE['panel']};border:1px solid "
+            f"{PALETTE['line_strong']};border-radius:9px;}}")
+        zp = QHBoxLayout(self._zoom_pill)
+        zp.setContentsMargins(4, 2, 4, 2)
+        zp.setSpacing(2)
+        self._btn_zoom_out = QToolButton()
+        self._btn_zoom_out.setText("−")
+        self._btn_zoom_in = QToolButton()
+        self._btn_zoom_in.setText("＋")
+        for b in (self._btn_zoom_out, self._btn_zoom_in):
+            b.setFixedSize(26, 24)
+        self._zoom_label = QLabel("100%")
+        self._zoom_label.setObjectName("zoomLabel")
+        self._zoom_label.setStyleSheet(f"color:{PALETTE['text']};font-size:11px;")
+        self._zoom_label.setFixedWidth(42)
+        self._zoom_label.setAlignment(Qt.AlignCenter)
+        self._btn_zoom_fit = QToolButton()
+        self._btn_zoom_fit.setText("适应")
+        for b in (self._btn_zoom_fit,):
+            b.setFixedHeight(24)
+        for w in (self._btn_zoom_out, self._btn_zoom_in, self._btn_zoom_fit):
+            w.setCursor(Qt.PointingHandCursor)
+            w.setStyleSheet(
+                "QToolButton{border:none;background:transparent;color:"
+                + PALETTE["text_muted"] + ";font-size:12px;border-radius:6px;}"
+                "QToolButton:hover{background:" + PALETTE["panel_alt"]
+                + ";color:" + PALETTE["text"] + ";}")
+        zp.addWidget(self._btn_zoom_out)
+        zp.addWidget(self._zoom_label)
+        zp.addWidget(self._btn_zoom_in)
+        zp.addWidget(self._btn_zoom_fit)
+        zoom_row.addWidget(self._zoom_pill)
+        zoom_row.addStretch(1)
+        cc_layout.addLayout(zoom_row)
+
+        self._splitter.addWidget(self._canvas_container)
 
         self._ann_panel = AnnotationPanel()
-        self._ann_panel.setMinimumWidth(280)
-        self._ann_panel.setMaximumWidth(340)
+        self._ann_panel.setFixedWidth(292)
+        self._ann_panel.data_folder_selected.connect(self.set_active_data_folder)
         self._splitter.addWidget(self._ann_panel)
 
         self._splitter.setStretchFactor(0, 0)
         self._splitter.setStretchFactor(1, 1)
         self._splitter.setStretchFactor(2, 0)
-        self._splitter.setSizes([320, 960, 300])
+        self._splitter.setSizes([260, 880, 292])
+        left_pane.setVisible(False)
+        # 点击检查器"数据版本 - 管理"时展开左侧数据版本栏
+
+        # 缩放胶囊
+        self._btn_zoom_in.clicked.connect(self._canvas.zoom_in)
+        self._btn_zoom_out.clicked.connect(self._canvas.zoom_out)
+        self._btn_zoom_fit.clicked.connect(self._canvas.zoom_fit)
+        self._canvas.zoom_changed.connect(
+            lambda scale: self._zoom_label.setText(f"{int(round(scale * 100))}%"))
 
         layout.addWidget(self._splitter, 1)
 
@@ -323,6 +442,93 @@ class DetectPoseView(TaskView):
 
 
 
+    # ── Scheme-A 标注页（设计稿对齐）──
+
+    def tools_strip(self) -> QWidget:
+        """工具条 strip，由 LabelPanel 注入顶部单行工具栏。"""
+        return self._tools_strip
+
+    def revert_button(self) -> QPushButton:
+        """撤销可见预标注按钮（进入“更多”菜单）。"""
+        return self._btn_revert_visible
+
+    def _open_data_folder_pane(self) -> None:
+        """点击"管理"：展开左侧数据版本栏。"""
+        self._left_pane.setVisible(True)
+        total = max(600, self.width())
+        self._splitter.setSizes([260, max(240, total - 560), 292])
+
+    def toggle_file_list(self) -> None:
+        """显示 / 隐藏左侧数据版本 + 文件列表抽屉 (Ctrl+L)。"""
+        visible = not self._left_pane.isVisible()
+        self._left_pane.setVisible(visible)
+        if visible:
+            total = max(600, self.width())
+            self._splitter.setSizes([260, max(240, total - 580), 292])
+        self._emit_status()
+
+    def set_active_data_folder(self, folder: str) -> None:
+        """检查器“数据版本”行点击 → 复用左侧树同一套切换流程。"""
+
+        def walk(item):
+            if item is None:
+                return None
+            if item.data(0, Qt.UserRole) == folder:
+                return item
+            for i in range(item.childCount()):
+                found = walk(item.child(i))
+                if found is not None:
+                    return found
+            return None
+
+        for i in range(self._data_tree.topLevelItemCount()):
+            found = walk(self._data_tree.topLevelItem(i))
+            if found is not None:
+                self._data_tree.setCurrentItem(found)
+                return
+
+    def _update_canvas_hud(self) -> None:
+        """画布上方 HUD 信息条 + 检查器“当前图片”区（随状态刷新）。"""
+        if not hasattr(self, "_hud_file") or not hasattr(self, "_ann_panel"):
+            return
+        path = self._current_image_path
+        if self._project is not None:
+            folder = self._project.config.active_data_folder or ""
+        else:
+            folder = ""
+        folder_name = folder.split("/")[-1] if folder else "全部图片"
+        if path is None:
+            self._hud_file.setText("无图片")
+            self._hud_counts.setText("标注 0 · 待确认 0")
+            self._hud_model.hide()
+            if hasattr(self, "_ann_panel"):
+                self._ann_panel.set_current_image_info("—", "—", "—", folder_name)
+            return
+        self._hud_file.setText(f"{folder_name} / {path.name}")
+        anns = list(self._canvas.annotations)
+        n_conf = sum(1 for a in anns if a.confirmed)
+        self._hud_counts.setText(f"标注 {len(anns)} · 待确认 {len(anns) - n_conf}")
+        sources = sorted({
+            str(a.source) for a in anns
+            if getattr(a, "source", "") and a.source != "manual"
+        })
+        if sources:
+            self._hud_model.setText(f"模型 {sources[0]} 预标注")
+            self._hud_model.show()
+        else:
+            self._hud_model.hide()
+        if self._current_annotation is not None:
+            size = self._current_annotation.image_size or (0, 0)
+            size_text = f"{size[0]} × {size[1]}" if size[0] else "—"
+            status_map = {"confirmed": "已确认", "pending": "待确认",
+                          "unlabeled": "未标注"}
+            status = status_map.get(
+                getattr(self._current_annotation, "status", ""), "—")
+        else:
+            size_text, status = "—", "—"
+        self._ann_panel.set_current_image_info(path.name, size_text, status,
+                                               folder_name)
+
     def set_project(self, project: ProjectManager) -> None:
         self._project = project
         self._current_image_path = None
@@ -332,13 +538,11 @@ class DetectPoseView(TaskView):
         # Normalize legacy/case-variant task values before configuring tools.
         self._task_type = str(project.config.task_type).strip().casefold()
         is_obb = self._task_type == "obb"
-        self._btn_polygon.setVisible(self._task_type in {"segment", "obb"})
-        self._btn_obb.setVisible(is_obb)
+        # 设计稿：五个绘图工具始终可见（旋转框/多边形/关键点跨任务可用）
         self._obb_tool_active = False
         self._canvas.set_polygon_point_limit(None)
         self._canvas.set_obb_editing_enabled(is_obb)
         self._set_tool("select")
-        self._btn_keypoint.setVisible(self._task_type == "pose")
 
         self._refresh_data_folder_tree()
         images = self._load_active_data_folder(select_first=True)
@@ -357,9 +561,39 @@ class DetectPoseView(TaskView):
         self._ann_panel.set_available_tags(tags)
 
     def _folder_item(self, folder: str, label: str | None = None) -> QTreeWidgetItem:
-        item = QTreeWidgetItem([label or folder])
+        item = QTreeWidgetItem([label or folder or "全部图片"])
         item.setData(0, Qt.UserRole, folder)
+        item.setData(0, Qt.UserRole + 1, label or folder or "全部图片")
         return item
+
+    def _apply_folder_card(self, item: QTreeWidgetItem, folder: str) -> None:
+        """数据版本卡片：名称（左）+ 图片数（右）。需在 item 入树后调用。"""
+        name = item.data(0, Qt.UserRole + 1) or folder or "全部图片"
+        count = 0
+        if self._project is not None:
+            count = len(self._project.list_images(data_folder=folder))
+        card = QWidget()
+        # 鼠标事件穿透卡片 → 触发 QTreeWidget item 点击/选中
+        card.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        card.setStyleSheet(
+            "QWidget{background:%s;border:1px solid %s;border-radius:6px;}"
+            "QWidget QLabel{background:transparent;border:none;}"
+            % (PALETTE["panel_alt"], PALETTE["line"]))
+        hl = QHBoxLayout(card)
+        hl.setContentsMargins(8, 4, 8, 4)
+        hl.setSpacing(6)
+        nm = QLabel(name)
+        nm.setStyleSheet(
+            f"color:{PALETTE['text']};font-size:12px;font-weight:600;")
+        cnt = QLabel(f"{count} 张")
+        cnt.setStyleSheet(
+            f"color:{PALETTE['text_subtle']};font-size:11px;font-family:'Menlo';")
+        hl.addWidget(nm)
+        hl.addStretch(1)
+        hl.addWidget(cnt)
+        card.setFixedHeight(30)
+        item.setSizeHint(0, QSize(card.sizeHint().width(), 34))
+        self._data_tree.setItemWidget(item, 0, card)
 
     def _refresh_data_folder_tree(self) -> None:
         if self._project is None:
@@ -380,11 +614,25 @@ class DetectPoseView(TaskView):
 
         self._data_tree.expandAll()
         all_item.setExpanded(True)
+        # 入树后统一应用卡片（setItemWidget 需 item 已在树中）
+        for folder, item in items_by_folder.items():
+            self._apply_folder_card(item, folder)
         current = self._project.config.active_data_folder
         item = items_by_folder.get(current, all_item)
         self._data_tree.setCurrentItem(item)
         self._last_data_tree_item = item
         self._refreshing_data_tree = False
+
+        # 同步右侧检查器“数据版本”列表（带图片计数）
+        if hasattr(self, "_ann_panel"):
+            rows = [("", "全部图片")]
+            for folder in self._project.list_data_folders():
+                n = len(self._project.list_images(data_folder=folder))
+                rows.append((folder, f"{folder.split(chr(47))[-1]}  ({n})"))
+            total_n = len(self._project.list_images())
+            rows[0] = ("", f"全部图片  ({total_n})")
+            self._ann_panel.set_data_folders(
+                rows, self._project.config.active_data_folder or "")
 
     def _load_active_data_folder(self, select_first: bool = False) -> list[Path]:
         if self._project is None:
@@ -430,7 +678,6 @@ class DetectPoseView(TaskView):
 
         folder = self._selected_data_folder()
         menu = QMenu(self)
-        add_action = menu.addAction("新建数据版本...")
         import_files_action = import_dir_action = None
         if folder:
             import_files_action = menu.addAction("添加图片...")
@@ -442,9 +689,7 @@ class DetectPoseView(TaskView):
             delete_action = menu.addAction("删除")
 
         chosen = menu.exec_(self._data_tree.viewport().mapToGlobal(pos))
-        if chosen == add_action:
-            self._on_add_data_folder()
-        elif import_files_action is not None and chosen == import_files_action:
+        if import_files_action is not None and chosen == import_files_action:
             self._on_import_images_to_data_folder()
         elif import_dir_action is not None and chosen == import_dir_action:
             self._on_import_image_directory_to_data_folder()
@@ -469,6 +714,14 @@ class DetectPoseView(TaskView):
         self._init_stats_cache()
         name = folder or "全部图片"
         self.status_changed.emit(f"已切换数据版本: {name} ({len(images)} 张)")
+        if hasattr(self, "_ann_panel") and self._project is not None:
+            rows = [("", "全部图片")]
+            for f in self._project.list_data_folders():
+                n = len(self._project.list_images(data_folder=f))
+                rows.append((f, f"{f.split(chr(47))[-1]}  ({n})"))
+            rows[0] = ("", f"全部图片  ({len(self._project.list_images())})")
+            self._ann_panel.set_data_folders(
+                rows, self._project.config.active_data_folder or "")
 
     def _on_add_data_folder(self) -> None:
         if self._project is None:
@@ -747,7 +1000,8 @@ class DetectPoseView(TaskView):
 
         if self._project and self._current_annotation is not None:
             self._canvas.set_annotations(list(self._current_annotation.annotations))
-            self._ann_panel.set_annotations(list(self._current_annotation.annotations))
+            self._ann_panel.set_annotations(list(self._current_annotation.annotations),
+                                            self._current_annotation.image_size)
             self._ann_panel.set_image_user_tags(list(self._current_annotation.tags))
 
             self._emit_status()
@@ -1141,7 +1395,9 @@ class DetectPoseView(TaskView):
         self._sync_annotations_to_panel()
 
     def _sync_annotations_to_panel(self) -> None:
-        self._ann_panel.set_annotations(list(self._canvas.annotations))
+        self._ann_panel.set_annotations(
+            list(self._canvas.annotations),
+            getattr(self._current_annotation, "image_size", None))
         self._save_current()
         self._emit_status()
 
@@ -1157,6 +1413,7 @@ class DetectPoseView(TaskView):
             f"{idx}/{total}",
             f"标注: {n_ann}",
         ]
+        self._update_canvas_hud()
         if n_pending > 0:
             parts.append(f"确认: {n_confirmed} 待确认: {n_pending}")
         self.status_changed.emit(" | ".join(parts))
@@ -1171,6 +1428,8 @@ class DetectPoseView(TaskView):
             "labeled_images": 0,
             "confirmed_images": 0,
             "total_annotations": 0,
+            "confirmed_annotations": 0,
+            "pending_annotations": 0,
             "class_counts": {},
         }
         images = self._project.list_images()
@@ -1186,6 +1445,10 @@ class DetectPoseView(TaskView):
                 stats["confirmed_images"] += 1
             for ann in ia.annotations:
                 stats["total_annotations"] += 1
+                if ann.confirmed:
+                    stats["confirmed_annotations"] += 1
+                else:
+                    stats["pending_annotations"] += 1
                 stats["class_counts"][ann.class_name] = stats["class_counts"].get(ann.class_name, 0) + 1
         return stats
 
@@ -1211,14 +1474,24 @@ class DetectPoseView(TaskView):
         elif not old_all_confirmed and new_all_confirmed:
             self._stats_cache["confirmed_images"] += 1
 
-        for cls, _ in old_snap:
+        for cls, c in old_snap:
             self._stats_cache["total_annotations"] -= 1
+            if c:
+                self._stats_cache["confirmed_annotations"] = max(
+                    0, self._stats_cache.get("confirmed_annotations", 0) - 1)
+            else:
+                self._stats_cache["pending_annotations"] = max(
+                    0, self._stats_cache.get("pending_annotations", 0) - 1)
             self._stats_cache["class_counts"][cls] = self._stats_cache["class_counts"].get(cls, 1) - 1
             if self._stats_cache["class_counts"][cls] <= 0:
                 del self._stats_cache["class_counts"][cls]
 
-        for cls, _ in new_snap:
+        for cls, c in new_snap:
             self._stats_cache["total_annotations"] += 1
+            if c:
+                self._stats_cache["confirmed_annotations"] =                     self._stats_cache.get("confirmed_annotations", 0) + 1
+            else:
+                self._stats_cache["pending_annotations"] =                     self._stats_cache.get("pending_annotations", 0) + 1
             self._stats_cache["class_counts"][cls] = self._stats_cache["class_counts"].get(cls, 0) + 1
 
         self._ann_panel.set_project_stats(self._stats_cache)

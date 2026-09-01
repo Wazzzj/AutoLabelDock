@@ -78,6 +78,49 @@ class ProjectController:
         name, proj_dir, image_dir, classes, task_type = dlg.get_values()
         if not name or not proj_dir:
             return None
+        # 目录查重：与已有项目目录相同，或目录内已存在 project.json → 拒绝创建
+        new_dir = Path(proj_dir)
+        existing_dir: Path | None = None
+        try:
+            new_resolved = new_dir.resolve()
+        except OSError:
+            new_resolved = new_dir
+        for recent in self._app_config.recent_projects:
+            recent_dir = Path(str(recent))
+            try:
+                same = recent_dir.resolve() == new_resolved
+            except OSError:
+                same = recent_dir == new_dir
+            if same:
+                existing_dir = recent_dir
+                break
+        if existing_dir is None and (new_dir / "project.json").exists():
+            existing_dir = new_dir
+        if existing_dir is not None:
+            existing_name = existing_dir.name
+            try:
+                cfg = json.loads(
+                    (existing_dir / "project.json").read_text(encoding="utf-8"))
+                existing_name = str(cfg.get("name", existing_name))
+            except (OSError, ValueError):
+                pass
+
+            # 直接提供“打开该项目”入口，避免死路
+            box = QMessageBox(QMessageBox.Warning, "已有项目",
+                              f"所选目录已存在项目「{existing_name}」：\n"
+                              f"{proj_dir}\n\n"
+                              "可以直接打开它继续使用，或更换目录新建。",
+                              parent=self._parent)
+            open_btn = box.addButton("打开该项目", QMessageBox.AcceptRole)
+            box.addButton("更换目录", QMessageBox.RejectRole)
+            box.exec_()
+            if box.clickedButton() is open_btn:
+                try:
+                    return ProjectManager.open(str(existing_dir))
+                except (OSError, ValueError) as e:
+                    QMessageBox.warning(self._parent, "打开项目失败", str(e))
+                    return None
+            return None
         try:
             pm = ProjectManager.create(
                 proj_dir, name,
