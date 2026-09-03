@@ -36,16 +36,18 @@ class _ClassRow(QWidget):
     with WA_TransparentForMouseEvents. So each row carries its own signal.
     """
 
-    double_clicked = pyqtSignal(str)  # class name
+    clicked = pyqtSignal(str)  # class name
 
     def __init__(self, cls_name: str, parent=None):
         super().__init__(parent)
         self._cls_name = cls_name
 
-    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802 (Qt naming)
         if event.button() == Qt.LeftButton:
-            self.double_clicked.emit(self._cls_name)
-        super().mouseDoubleClickEvent(event)
+            self.clicked.emit(self._cls_name)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
 
 class _AnnCardDelegate(QStyledItemDelegate):
@@ -57,6 +59,7 @@ class _AnnCardDelegate(QStyledItemDelegate):
     """
 
     CARD_ROLE = Qt.UserRole + 2   # 形状·面积 文本（有值 = 卡片模式）
+    CONFIDENCE_ROLE = Qt.UserRole + 3
     STATE_ROLE = Qt.UserRole + 4  # bool 已确认
 
     def paint(self, painter, option, index):
@@ -90,14 +93,24 @@ class _AnnCardDelegate(QStyledItemDelegate):
         painter.setBrush(color)
         painter.drawRoundedRect(sw, 4, 4)
 
-        # 第一行：状态图标 + 类别名
+        # 第一行：类别名 + 置信度
         name_x = sw.right() + 10
         name = index.data(Qt.DisplayRole) or ""
         f1 = QFont(option.font)
-        f1.setPixelSize(12)
+        f1.setPixelSize(13)
+        f1.setWeight(QFont.DemiBold)
         painter.setFont(f1)
         painter.setPen(QColor(PALETTE["text"]))
-        painter.drawText(QPoint(name_x, rect.top() + 20), name)
+        painter.drawText(QPoint(name_x, rect.top() + 22), name)
+
+        confidence = index.data(self.CONFIDENCE_ROLE) or "—"
+        confidence_rect = QRect(rect.right() - 66, rect.top() + 8, 34, 20)
+        f_conf = QFont(option.font)
+        f_conf.setPixelSize(11)
+        f_conf.setFamily("Menlo")
+        painter.setFont(f_conf)
+        painter.setPen(QColor(PALETTE["text_muted"]))
+        painter.drawText(confidence_rect, Qt.AlignRight | Qt.AlignVCenter, confidence)
 
         # 第二行：形状 · 面积
         f2 = QFont(option.font)
@@ -105,7 +118,7 @@ class _AnnCardDelegate(QStyledItemDelegate):
         f2.setFamily("Menlo")
         painter.setFont(f2)
         painter.setPen(QColor(PALETTE["text_subtle"]))
-        painter.drawText(QPoint(name_x, rect.bottom() - 8), shape)
+        painter.drawText(QPoint(name_x, rect.bottom() - 12), shape)
 
         # 右侧状态圈
         confirmed = index.data(self.STATE_ROLE)
@@ -131,7 +144,7 @@ class _AnnCardDelegate(QStyledItemDelegate):
 
     def sizeHint(self, option, index):
         if index.data(self.CARD_ROLE):
-            return QSize(option.rect.width() if option.rect.width() > 0 else 240, 32)
+            return QSize(option.rect.width() if option.rect.width() > 0 else 240, 58)
         return super().sizeHint(option, index)
 
 
@@ -175,6 +188,7 @@ class AnnotationPanel(QWidget):
         self._selected_kp_idx: int | None = None
         self._classes: list[str] = []
         self._class_colors: dict[str, str] = {}
+        self._project_class_counts: dict[str, int] = {}
         self._default_class: str | None = None
         self._init_ui()
 
@@ -202,7 +216,8 @@ class AnnotationPanel(QWidget):
         self._img_folder_label = self._img_info_label
 
         # ── 标注列表 ──
-        ann_box, ann_layout = self._flat_section("标注列表 · 紧凑版")
+        ann_box, ann_layout = self._flat_section("标注列表", "全部展开",
+                                                self._expand_annotation_tree)
         self._ann_tree = QTreeWidget()
         self._ann_tree.setHeaderHidden(True)
         self._ann_tree.setIndentation(12)
@@ -261,7 +276,7 @@ class AnnotationPanel(QWidget):
         cls_box, cls_layout = self._flat_section("类别 · 点击设默认")
         self._classes_list = QListWidget()
         self._classes_list.setToolTip(
-            "双击设为下次画框/关键点的默认类别；再次双击当前类可取消"
+            "点击设为下次画框/关键点的默认类别；再次点击当前类可取消"
         )
         self._classes_list.setMinimumHeight(96)
         self._classes_list.setStyleSheet(
@@ -444,7 +459,6 @@ class AnnotationPanel(QWidget):
 
         for ann in annotations:
             color = QColor(self._class_colors.get(ann.class_name, PALETTE["primary"]))
-            status_icon = "\u2713" if ann.confirmed else "\u26a1"
             if ann.polygon:
                 type_hint = f"多边形 \u00d7{len(ann.polygon)}"
             elif ann.bbox and ann.keypoints:
@@ -454,7 +468,7 @@ class AnnotationPanel(QWidget):
             elif ann.keypoints:
                 type_hint = f"关键点 \u00d7{len(ann.keypoints)}"
 
-            top_item = QTreeWidgetItem([f"{status_icon}  {ann.class_name}"])
+            top_item = QTreeWidgetItem([ann.class_name])
             top_item.setData(0, Qt.UserRole, ann.id)
             top_item.setData(0, Qt.UserRole + 1, -1)  # -1 = annotation level
             top_item.setData(0, Qt.ForegroundRole, color)  # 委托色块颜色
@@ -464,6 +478,8 @@ class AnnotationPanel(QWidget):
             shape_line = " · ".join(
                 part for part in (type_hint, area_text) if part)
             top_item.setData(0, _AnnCardDelegate.CARD_ROLE, shape_line)
+            top_item.setData(0, _AnnCardDelegate.CONFIDENCE_ROLE,
+                             f"{ann.confidence:.2f}")
             top_item.setData(0, _AnnCardDelegate.STATE_ROLE, ann.confirmed)
             self._ann_tree.addTopLevelItem(top_item)
             # 关键点子行不再入树（设计稿）：卡片第二行显示“关键点 ×N”，
@@ -614,8 +630,12 @@ class AnnotationPanel(QWidget):
                           - int(stats.get("labeled_images", 0) or 0))
         self._update_version_bar(confirmed_anns, pending_anns, max(0, unlabeled_imgs))
 
-        self._class_dist_list.clear()
         class_counts = stats.get("class_counts", {})
+        self._project_class_counts = {
+            str(name): int(count or 0) for name, count in class_counts.items()
+        }
+        self._refresh_class_counts()
+        self._class_dist_list.clear()
         for cls_name, count in sorted(class_counts.items(), key=lambda x: -x[1]):
             color = self._class_colors.get(cls_name, PALETTE["primary"])
             item = QListWidgetItem(f"{cls_name}: {count}")
@@ -793,49 +813,39 @@ class AnnotationPanel(QWidget):
     def _swatch_style(color_hex: str) -> str:
         """Return QSS for a small color swatch that visually echoes the bbox
         stroke color rendered on canvas (same hex source)."""
-        return (
-            f"background-color: {color_hex};"
-            f"border: 1px solid {PALETTE['line_strong']};"
-            "border-radius: 2px;"
-        )
+        return f"background-color:{color_hex};border:none;border-radius:3px;"
 
     def _make_class_row(self, idx: int, cls_name: str, color: str) -> QWidget:
-        """Build the per-row widget: swatch + index/name (left) + count (right).
+        """Build the per-row widget: swatch + name (left) + count (right).
 
-        The row owns its own `double_clicked(str)` signal — see _ClassRow.
+        The row owns its own `clicked(str)` signal — see _ClassRow.
         """
         row = _ClassRow(cls_name)
-        row.double_clicked.connect(self._on_class_double_clicked)
+        row.clicked.connect(self._on_class_clicked)
 
         hl = QHBoxLayout(row)
-        hl.setContentsMargins(4, 1, 6, 1)
-        hl.setSpacing(6)
+        hl.setContentsMargins(8, 3, 8, 3)
+        hl.setSpacing(8)
 
         swatch = QLabel()
-        swatch.setFixedSize(12, 12)
+        swatch.setFixedSize(14, 14)
         swatch.setStyleSheet(self._swatch_style(color))
         swatch.setObjectName("swatch")
 
-        from PyQt5.QtGui import QPalette
-        # 卡片式行背景（同标注列表卡片风格）；去掉文本下划线
         row.setStyleSheet(
-            "QWidget{background:%s;border:1px solid %s;border-radius:6px;}"
+            "QWidget{background:transparent;border:none;border-radius:0;}"
             "QWidget QLabel{background:transparent;border:none;}"
-            % (PALETTE["panel_alt"], PALETTE["line"])
         )
-        name_lbl = QLabel(f"{idx}  {cls_name}")
-        pal = name_lbl.palette()
-        pal.setColor(QPalette.WindowText, QColor(color))
-        name_lbl.setPalette(pal)
+        name_lbl = QLabel(cls_name)
         f = name_lbl.font()
         f.setUnderline(False)
         name_lbl.setFont(f)
         name_lbl.setObjectName("name_lbl")
 
         count_lbl = QLabel("0")
-        cpal = count_lbl.palette()
-        cpal.setColor(QPalette.WindowText, QColor(color))
-        count_lbl.setPalette(cpal)
+        count_lbl.setStyleSheet(
+            f"color:{PALETTE['text_subtle']};font-family:Menlo,'SF Mono',monospace;"
+        )
         count_lbl.setObjectName("count_lbl")
 
         hl.addWidget(swatch)
@@ -869,7 +879,9 @@ class AnnotationPanel(QWidget):
         self._refresh_default_highlight()
 
     def _class_count_text(self, cls_name: str) -> str:
-        """`×N` for annotations, suffixed with `(K kp)` when keypoints exist."""
+        """Project-wide class count, matching the design inspector."""
+        if cls_name in self._project_class_counts:
+            return f"{self._project_class_counts[cls_name]:,}"
         ann_count = 0
         kp_count = 0
         for a in self._annotations:
@@ -911,7 +923,7 @@ class AnnotationPanel(QWidget):
             font.setBold(is_default)
             name_lbl.setFont(font)
 
-    def _on_class_double_clicked(self, cls_name: str) -> None:
+    def _on_class_clicked(self, cls_name: str) -> None:
         if not cls_name:
             return
         if cls_name == self._default_class:

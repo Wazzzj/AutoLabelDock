@@ -6,7 +6,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QApplication, QDialog, QMessageBox
+from PyQt5.QtWidgets import QApplication, QDialog, QLabel, QMessageBox
 
 from src.core.annotation import Annotation
 from src.ui.class_picker import ClassPickerPopup, KeypointLabelPicker
@@ -45,6 +45,44 @@ def test_annotation_panel_clear_all_signal_emits():
     ])
     panel.clear_all_annotations_requested.emit()
     assert emitted == [True]
+    panel.close()
+
+
+def test_annotation_inspector_matches_card_and_class_list_design():
+    """右侧检查器保持设计稿的卡片标注与扁平类别列表层级。"""
+    panel = AnnotationPanel()
+    panel.resize(292, 760)
+    panel.set_class_colors({"bolt": "#4D9FFF", "scratch": "#F16A5D"})
+    panel.set_classes(["bolt", "scratch"])
+    annotations = [
+        Annotation(
+            class_name="bolt", class_id=0, bbox=(0.5, 0.5, 0.4, 0.4),
+            confidence=0.96, confirmed=False,
+        ),
+        Annotation(
+            class_name="scratch", class_id=1, bbox=(0.5, 0.5, 0.2, 0.2),
+            confidence=0.91, confirmed=True,
+        ),
+    ]
+    panel.set_annotations(annotations, image_size=(1000, 1000))
+    panel.set_project_stats({"class_counts": {"bolt": 1203, "scratch": 31}})
+
+    assert panel._section_titles["标注列表"].text() == "标注列表 · 2"
+    assert panel._ann_tree.sizeHintForRow(0) == 58
+    first_ann = panel._ann_tree.topLevelItem(0)
+    assert first_ann.text(0) == "bolt"
+    assert first_ann.data(0, Qt.UserRole + 3) == "0.96"
+
+    first_class = panel._classes_list.itemWidget(panel._classes_list.item(0))
+    assert first_class.findChild(QLabel, "name_lbl").text() == "bolt"
+    assert first_class.findChild(QLabel, "count_lbl").text() == "1,203"
+    assert "background:transparent" in first_class.styleSheet()
+    assert "border:none" in first_class.styleSheet()
+
+    selected = []
+    panel.default_class_changed.connect(selected.append)
+    QTest.mouseClick(first_class, Qt.LeftButton)
+    assert selected == ["bolt"]
     panel.close()
 
 
