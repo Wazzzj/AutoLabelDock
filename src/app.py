@@ -1352,6 +1352,9 @@ class MainWindow(QMainWindow):
             self._project = None
             self._project_ctrl._project = None
             self._select_image_dir_action.setEnabled(False)
+            self.setWindowTitle("AutoLabel Dock")
+            self._top_bar.clear_project_context()
+            self._set_project_dir_label(None)
             self._status_label.setText("项目已移除")
 
     def _on_export(self) -> None:

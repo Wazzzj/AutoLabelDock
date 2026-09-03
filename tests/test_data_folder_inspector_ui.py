@@ -9,6 +9,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QMessageBox, QToolButton
 
+from src.app import MainWindow
 from src.core.project import ProjectManager
 from src.ui.properties import AnnotationPanel
 from src.ui.shell import TopBar
@@ -54,6 +55,43 @@ def test_project_context_and_data_version_manage_action_are_prominent():
     assert emitted == [True]
     panel.close()
     top_bar.close()
+
+
+def test_project_context_elides_long_names_without_covering_shell_statuses():
+    top_bar = TopBar()
+    top_bar.resize(440, 44)
+    top_bar.set_device("Apple M5")
+    top_bar.set_version("v0.1.0")
+    project_name = "超长项目名称" * 12
+    top_bar.set_project_context(project_name, "segment")
+    top_bar.show()
+    _APP.processEvents()
+
+    assert top_bar._project_name_label.text() != project_name
+    assert top_bar._project_name_label.toolTip() == project_name
+    assert top_bar._device_chip.geometry().right() < top_bar.width()
+    assert top_bar._version_chip.geometry().right() < top_bar.width()
+    top_bar.close()
+
+
+def test_removing_active_project_clears_shell_project_context(tmp_path):
+    project = ProjectManager.create(tmp_path / "project", "demo", task_type="detect")
+    window = MainWindow(config_path=tmp_path / "config.json")
+    window._project = project
+    window._project_ctrl._project = project
+    window._app_config.recent_projects = [str(project.project_dir)]
+    window.setWindowTitle("AutoLabel Dock — demo")
+    window._top_bar.set_project_context("demo", "detect")
+
+    with patch.object(QMessageBox, "question", return_value=QMessageBox.Yes):
+        window._on_remove_recent_project(str(project.project_dir))
+
+    assert window._project is None
+    assert window.windowTitle() == "AutoLabel Dock"
+    assert window._top_bar._project_context.isHidden()
+    assert window._project_dir_label.text() == "项目目录: 未打开项目"
+    assert window._project_dir_label.toolTip() == "项目目录: 未打开项目"
+    window.close()
 
 
 def test_all_images_card_is_centered_and_root_menu_has_all_actions(tmp_path):

@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Callable
 
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QPoint
-from PyQt5.QtGui import QColor, QPainter, QPen, QFont
+from PyQt5.QtGui import QColor, QFontMetrics, QPainter, QPen, QFont
 from PyQt5.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -320,14 +320,21 @@ class TopBar(QWidget):
         self._project_badge.setAlignment(Qt.AlignCenter)
         self._project_name_label = QLabel(self._project_context)
         self._project_name_label.setObjectName("ProjectName")
+        self._project_name_label.setMinimumWidth(0)
+        self._project_name_label.setSizePolicy(
+            QSizePolicy.Ignored, QSizePolicy.Preferred
+        )
         self._task_type_chip = QLabel(self._project_context)
         self._task_type_chip.setObjectName("TaskTypeChip")
         context_layout.addWidget(self._project_badge)
-        context_layout.addWidget(self._project_name_label)
+        context_layout.addWidget(self._project_name_label, 1)
         context_layout.addWidget(self._task_type_chip)
+        self._project_context.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Preferred
+        )
+        self._project_name_full = ""
         self._project_context.hide()
-        layout.addWidget(self._project_context)
-        layout.addStretch(1)
+        layout.addWidget(self._project_context, 1)
 
         self._device_chip = QLabel(self)
         self._device_chip.setObjectName("TopChip")
@@ -353,14 +360,48 @@ class TopBar(QWidget):
         """Show the current project identity in the shell's left context slot."""
         clean_name = str(name or "").strip()
         if not clean_name:
-            self._project_context.hide()
+            self.clear_project_context()
             return
         self._project_badge.setText(clean_name[:2])
         self._project_badge.setToolTip(clean_name)
+        self._project_name_full = clean_name
         self._project_name_label.setText(clean_name)
         self._project_name_label.setToolTip(clean_name)
         self._task_type_chip.setText(str(task_type or "").strip().casefold())
         self._project_context.show()
+        if self.isVisible():
+            QTimer.singleShot(0, self._elide_project_name)
+
+    def clear_project_context(self) -> None:
+        """Hide and reset the current-project identity in the shell."""
+        self._project_name_full = ""
+        self._project_badge.clear()
+        self._project_badge.setToolTip("")
+        self._project_name_label.clear()
+        self._project_name_label.setToolTip("")
+        self._task_type_chip.clear()
+        self._project_context.hide()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if self._project_context.isVisible():
+            QTimer.singleShot(0, self._elide_project_name)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if self._project_context.isVisible():
+            QTimer.singleShot(0, self._elide_project_name)
+
+    def _elide_project_name(self) -> None:
+        if not self._project_name_full:
+            return
+        available_width = self._project_name_label.contentsRect().width()
+        if available_width <= 0:
+            return
+        text = QFontMetrics(self._project_name_label.font()).elidedText(
+            self._project_name_full, Qt.ElideRight, available_width
+        )
+        self._project_name_label.setText(text)
 
 
 # ────────────────────────────────────────────────────────────
