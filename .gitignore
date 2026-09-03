@@ -43,6 +43,7 @@ config/train_templates.json
 # ---- 本机构建 / Codex 临时文件 ----
 *.spec
 /.codex-*
+/.worktrees/
 
 # ---- IDE / 编辑器 / 操作系统 ----
 .vscode/
