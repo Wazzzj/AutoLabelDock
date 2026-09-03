@@ -277,7 +277,8 @@ class DetectPoseView(TaskView):
         )
         self._data_tree.setMaximumHeight(150)
         self._data_tree.setIndentation(14)
-        self._data_tree.setRootIsDecorated(True)
+        # “全部图片”是满宽数据卡片，不显示根节点展开装饰，避免卡片偏右。
+        self._data_tree.setRootIsDecorated(False)
         self._data_tree.setContextMenuPolicy(Qt.CustomContextMenu)
         left_layout.addWidget(self._data_tree, 0)
 
@@ -677,26 +678,30 @@ class DetectPoseView(TaskView):
             self._data_tree.setCurrentItem(item)
 
         folder = self._selected_data_folder()
+        menu, actions = self._build_data_folder_context_menu(folder)
+        chosen = menu.exec_(self._data_tree.viewport().mapToGlobal(pos))
+        if chosen == actions.get("import_files"):
+            self._on_import_images_to_data_folder()
+        elif chosen == actions.get("import_directory"):
+            self._on_import_image_directory_to_data_folder()
+        elif chosen == actions.get("rename"):
+            self._on_rename_data_folder()
+        elif chosen == actions.get("delete_images"):
+            self._delete_selected_data_folder_images()
+
+    def _build_data_folder_context_menu(self, folder: str) -> tuple[QMenu, dict[str, object]]:
+        """Create the data-version menu shared by folders and “全部图片”."""
         menu = QMenu(self)
-        import_files_action = import_dir_action = None
-        if folder:
-            import_files_action = menu.addAction("添加图片...")
-            import_dir_action = menu.addAction("添加图片目录...")
-        rename_action = delete_action = None
+        actions = {
+            "import_files": menu.addAction("导入图片..."),
+            "import_directory": menu.addAction("导入图片目录..."),
+        }
         if folder:
             menu.addSeparator()
-            rename_action = menu.addAction("重命名")
-            delete_action = menu.addAction("删除")
-
-        chosen = menu.exec_(self._data_tree.viewport().mapToGlobal(pos))
-        if import_files_action is not None and chosen == import_files_action:
-            self._on_import_images_to_data_folder()
-        elif import_dir_action is not None and chosen == import_dir_action:
-            self._on_import_image_directory_to_data_folder()
-        elif rename_action is not None and chosen == rename_action:
-            self._on_rename_data_folder()
-        elif delete_action is not None and chosen == delete_action:
-            self._on_delete_data_folder()
+            actions["rename"] = menu.addAction("重命名")
+        menu.addSeparator()
+        actions["delete_images"] = menu.addAction("删除")
+        return menu, actions
 
     def _on_data_folder_selected(self, item: QTreeWidgetItem | None, _prev) -> None:
         if self._project is None or self._refreshing_data_tree or item is None:
@@ -742,8 +747,6 @@ class DetectPoseView(TaskView):
         if self._project is None:
             return
         folder = self._selected_data_folder()
-        if not folder:
-            return
         files, _selected_filter = QFileDialog.getOpenFileNames(
             self,
             "添加图片到数据版本",
@@ -758,8 +761,6 @@ class DetectPoseView(TaskView):
         if self._project is None:
             return
         folder = self._selected_data_folder()
-        if not folder:
-            return
         directory = QFileDialog.getExistingDirectory(
             self,
             "添加图片目录到数据版本",
@@ -1693,7 +1694,17 @@ class DetectPoseView(TaskView):
         self.status_changed.emit(f"批量删除标注: {count} 张图片")
         logger.info("Batch deleted annotations for %d images", count)
 
-    def _on_delete_images(self, paths: list[Path]) -> None:
+    def _delete_selected_data_folder_images(self) -> None:
+        """Delete all images and sidecars in the tree's selected data version."""
+        if self._project is None:
+            return
+        folder = self._selected_data_folder()
+        self._on_delete_images(
+            self._project.list_images(data_folder=folder),
+            scope_name=folder or "全部图片",
+        )
+
+    def _on_delete_images(self, paths: list[Path], scope_name: str | None = None) -> None:
         """Delete image files and their labels from disk after confirmation."""
         if not self._project or not paths:
             return
@@ -1706,14 +1717,15 @@ class DetectPoseView(TaskView):
                 labeled_count += 1
 
         n = len(paths)
+        scope = f"数据版本「{scope_name}」中的 " if scope_name else ""
         if labeled_count:
             msg = (
-                f"确定要删除 {n} 张图片吗？\n"
+                f"确定要删除{scope}{n} 张图片吗？\n"
                 f"其中 {labeled_count} 张包含标注，将一并删除。\n\n"
                 "此操作不可撤销。"
             )
         else:
-            msg = f"确定要删除 {n} 张图片吗？\n\n此操作不可撤销。"
+            msg = f"确定要删除{scope}{n} 张图片吗？\n\n此操作不可撤销。"
         reply = QMessageBox.question(
             self, "删除图片", msg,
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
@@ -1735,6 +1747,7 @@ class DetectPoseView(TaskView):
             self._image_cache.invalidate(p)
             self._undo_stacks.pop(str(p), None)
         self._file_list.forget_paths(paths)
+        self._refresh_data_folder_tree()
 
         if current_in_deleted:
             self._current_image_path = None

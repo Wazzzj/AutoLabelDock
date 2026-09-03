@@ -217,6 +217,7 @@ class AnnotationPanel(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
+        outer.setAlignment(Qt.AlignTop)
         self._outer_layout = outer
         self._sections: dict[str, QWidget] = {}
         self._section_titles: dict[str, QLabel] = {}
@@ -397,6 +398,7 @@ class AnnotationPanel(QWidget):
                       right_signal=None):
         """设计稿扁平分区：小标题（+右侧链接）+ 内容 + 1px 底部分隔线。"""
         box = QWidget(self)
+        box.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         v = QVBoxLayout(box)
         v.setContentsMargins(10, 2, 10, 2)
         v.setSpacing(1)
