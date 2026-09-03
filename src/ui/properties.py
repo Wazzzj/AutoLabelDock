@@ -199,6 +199,7 @@ class AnnotationPanel(QWidget):
     open_preview_requested = pyqtSignal()
     manage_data_folders_requested = pyqtSignal()
     tag_manage_requested = pyqtSignal()
+    _ANN_TREE_MAX_HEIGHT = 380
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -242,7 +243,8 @@ class AnnotationPanel(QWidget):
         self._ann_tree.setHeaderHidden(True)
         self._ann_tree.setIndentation(12)
         self._ann_tree.setMinimumHeight(44)
-        self._ann_tree.setMaximumHeight(380)
+        self._ann_tree.setMaximumHeight(self._ANN_TREE_MAX_HEIGHT)
+        self._ann_tree.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         # 卡片外观完全由 _AnnCardDelegate 绘制；branch 用不透明深底压掉选中填充
         self._ann_tree.setStyleSheet(
             "QTreeWidget{background:transparent;border:none;}"
@@ -452,7 +454,9 @@ class AnnotationPanel(QWidget):
         if row_h <= 0:
             row_h = 24
         frame = self._ann_tree.frameWidth() * 2 + 12
-        self._ann_tree.setFixedHeight(rows * row_h + frame)
+        self._ann_tree.setFixedHeight(min(
+            rows * row_h + frame, self._ANN_TREE_MAX_HEIGHT
+        ))
 
     def save_state(self) -> dict:
         """扁平分区无可折叠状态；保留接口兼容。"""

@@ -95,7 +95,7 @@ def test_annotation_list_expands_and_elides_text_at_inspector_width():
     panel.set_annotations([
         Annotation(class_name=f"very-long-class-name-{index}", class_id=index,
                    bbox=(0.5, 0.5, 0.2, 0.2))
-        for index in range(4)
+        for index in range(7)
     ], image_size=(1000, 1000))
     panel.show()
     _QT_APP.processEvents()
@@ -109,6 +109,8 @@ def test_annotation_list_expands_and_elides_text_at_inspector_width():
     _QT_APP.processEvents()
 
     assert panel._ann_tree.height() > collapsed_height
+    assert panel._ann_tree.height() <= 380
+    assert panel._ann_tree.verticalScrollBar().maximum() > 0
     font = QFont()
     long_text = "very-long-class-name-that-must-not-overlap-confidence"
     rendered = _AnnCardDelegate._elided_text(font, long_text, 80)
