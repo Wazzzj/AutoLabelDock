@@ -43,8 +43,8 @@ def test_project_context_and_data_version_manage_action_are_prominent():
     top_bar = TopBar()
     top_bar.set_project_context("胶环密封检测", "segment")
     assert top_bar._project_name_label.text() == "胶环密封检测"
-    assert top_bar._task_type_chip.text() == "segment"
     assert top_bar._project_badge.text() == "胶环"
+    assert not hasattr(top_bar, "_task_type_chip")
 
     panel = AnnotationPanel()
     emitted = []

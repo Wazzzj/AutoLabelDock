@@ -299,11 +299,8 @@ class TopBar(QWidget):
             "#ProjectBadge{background:%s;border-radius:6px;color:%s;"
             "font-size:10px;font-weight:700;}"
             "#ProjectName{color:%s;font-size:13px;font-weight:700;}"
-            "#TaskTypeChip{background:%s;border-radius:5px;color:%s;"
-            "padding:3px 7px;font-size:10px;font-family:Menlo,'SF Mono',monospace;}"
             % (PALETTE["bg"], PALETTE["line"], PALETTE["text_muted"],
-               PALETTE["primary_soft"], PALETTE["primary"], PALETTE["text"],
-               PALETTE["panel_alt"], PALETTE["primary"])
+               PALETTE["primary_soft"], PALETTE["primary"], PALETTE["text"])
         )
 
         layout = QHBoxLayout(self)
@@ -324,11 +321,8 @@ class TopBar(QWidget):
         self._project_name_label.setSizePolicy(
             QSizePolicy.Ignored, QSizePolicy.Preferred
         )
-        self._task_type_chip = QLabel(self._project_context)
-        self._task_type_chip.setObjectName("TaskTypeChip")
         context_layout.addWidget(self._project_badge)
         context_layout.addWidget(self._project_name_label, 1)
-        context_layout.addWidget(self._task_type_chip)
         self._project_context.setSizePolicy(
             QSizePolicy.Expanding, QSizePolicy.Preferred
         )
@@ -367,7 +361,6 @@ class TopBar(QWidget):
         self._project_name_full = clean_name
         self._project_name_label.setText(clean_name)
         self._project_name_label.setToolTip(clean_name)
-        self._task_type_chip.setText(str(task_type or "").strip().casefold())
         self._project_context.show()
         if self.isVisible():
             QTimer.singleShot(0, self._elide_project_name)
@@ -379,7 +372,6 @@ class TopBar(QWidget):
         self._project_badge.setToolTip("")
         self._project_name_label.clear()
         self._project_name_label.setToolTip("")
-        self._task_type_chip.clear()
         self._project_context.hide()
 
     def resizeEvent(self, event) -> None:
