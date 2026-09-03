@@ -7,11 +7,12 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtTest import QTest
-from PyQt5.QtWidgets import QApplication, QMessageBox, QToolButton
+from PyQt5.QtWidgets import QApplication, QMessageBox, QPushButton, QToolButton
 
 from src.app import MainWindow
 from src.core.project import ProjectManager
 from src.ui.properties import AnnotationPanel
+from src.ui.label_panel import LabelPanel
 from src.ui.shell import TopBar
 from src.ui.views.detect_pose import DetectPoseView
 from src.utils.image import ImageCache
@@ -110,6 +111,60 @@ def test_all_images_card_is_centered_and_root_menu_has_all_actions(tmp_path):
     ]
     assert set(actions) == {"import_files", "import_directory", "delete_images"}
     view.close()
+
+
+def test_data_folder_header_close_button_hides_pane_and_manage_only_opens(tmp_path):
+    project = ProjectManager.create(tmp_path / "project", "demo", task_type="detect")
+    view = _make_view(project)
+
+    close_button = view._btn_close_data_folder_pane
+    assert isinstance(close_button, QPushButton)
+    assert close_button.text() == "收起"
+    assert close_button.toolTip() == "收起数据版本列表"
+    QTest.mouseClick(close_button, Qt.LeftButton)
+    assert view._left_pane.isHidden()
+
+    view._open_data_folder_pane()
+    assert view._left_pane.isVisible()
+    view.close()
+
+
+def test_data_version_manage_signal_only_opens_the_data_folder_pane(tmp_path):
+    project = ProjectManager.create(tmp_path / "project", "demo", task_type="detect")
+    panel = LabelPanel()
+    panel.set_project(project)
+    view = panel._view
+    panel.manage_data_folders_requested.connect(panel.open_data_folder_pane)
+    view._left_pane.hide()
+
+    view._ann_panel.manage_data_folders_requested.emit()
+    assert not view._left_pane.isHidden()
+    view._ann_panel.manage_data_folders_requested.emit()
+    assert not view._left_pane.isHidden()
+    panel.close()
+
+
+def test_data_folder_close_refreshes_the_more_menu_visibility_action(tmp_path):
+    project = ProjectManager.create(tmp_path / "project", "demo", task_type="detect")
+    panel = LabelPanel()
+    panel.resize(1280, 800)
+    panel.set_project(project)
+    panel.show()
+    _APP.processEvents()
+    view = panel._view
+    panel.open_data_folder_pane()
+
+    assert next(
+        action.text() for action in panel._more_menu.actions()
+        if "文件列表" in action.text()
+    ) == "隐藏文件列表 (Ctrl+L)"
+
+    QTest.mouseClick(view._btn_close_data_folder_pane, Qt.LeftButton)
+    assert next(
+        action.text() for action in panel._more_menu.actions()
+        if "文件列表" in action.text()
+    ) == "显示文件列表 (Ctrl+L)"
+    panel.close()
 
 
 def test_delete_selected_data_folder_removes_only_its_images_and_labels(tmp_path):

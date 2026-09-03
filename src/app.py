@@ -752,10 +752,10 @@ class MainWindow(QMainWindow):
             return
         self.open_project(pm)
 
-    def _toggle_label_file_list(self) -> None:
-        """检查器“数据版本 → 管理”→ 呼出文件列表抽屉。"""
+    def _open_label_file_list(self) -> None:
+        """检查器“数据版本 → 管理”→ 展开文件列表抽屉。"""
         if self._label_panel is not None:
-            self._label_panel._toggle_file_list()
+            self._label_panel.open_data_folder_pane()
 
     def _on_shell_open_project_dir(self, path: str) -> None:
         """主页卡片右键 → 在文件管理器中打开项目目录。"""
@@ -1016,7 +1016,7 @@ class MainWindow(QMainWindow):
                 self._label_panel.open_preview_requested.connect(
                     lambda: self._goto_page("preview"))
                 self._label_panel.manage_data_folders_requested.connect(
-                    self._toggle_label_file_list)
+                    self._open_label_file_list)
                 self._label_panel.tag_manage_requested.connect(
                     self._on_tag_manager)
                 # Experimental master switch: fully hide the LA bar when disabled.

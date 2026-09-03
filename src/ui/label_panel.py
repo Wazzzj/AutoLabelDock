@@ -375,6 +375,12 @@ class LabelPanel(QWidget):
             self._view.toggle_file_list()
             self._rebuild_more_menu()
 
+    def open_data_folder_pane(self) -> None:
+        """Open the data-version drawer without toggling its current state."""
+        if self._view is not None and hasattr(self._view, "_open_data_folder_pane"):
+            self._view._open_data_folder_pane()
+            self._rebuild_more_menu()
+
     def _open_filter_dialog(self) -> None:
         """“筛选与类别”小对话框（复用既有下拉控件）。"""
         from PyQt5.QtWidgets import QDialog, QVBoxLayout, QDialogButtonBox
@@ -471,6 +477,10 @@ class LabelPanel(QWidget):
 
         # Wire view -> shell signals
         self._view.status_changed.connect(self.status_changed.emit)
+        if hasattr(self._view, "file_list_visibility_changed"):
+            self._view.file_list_visibility_changed.connect(
+                lambda _visible: self._rebuild_more_menu()
+            )
         self._view.annotations_changed.connect(self._on_view_annotations_changed)
         self._view.images_dropped.connect(self._on_images_dropped)
         self._view.classes_changed.connect(self._on_view_classes_changed)

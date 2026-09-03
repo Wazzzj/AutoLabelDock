@@ -80,6 +80,7 @@ class DetectPoseView(TaskView):
     # Shell-level signals exposed for backwards compat with MainWindow wiring
     batch_confirm_visible_requested = pyqtSignal()
     batch_revert_visible_requested = pyqtSignal()
+    file_list_visibility_changed = pyqtSignal(bool)
 
     def __init__(
         self,
@@ -224,6 +225,12 @@ class DetectPoseView(TaskView):
         self._btn_add_data_folder.setToolTip("新建数据版本")
         set_button_role(self._btn_add_data_folder, "secondary")
         version_header.addWidget(self._btn_add_data_folder)
+        self._btn_close_data_folder_pane = QPushButton("收起")
+        self._btn_close_data_folder_pane.setFixedHeight(28)
+        self._btn_close_data_folder_pane.setMinimumWidth(54)
+        self._btn_close_data_folder_pane.setToolTip("收起数据版本列表")
+        set_button_role(self._btn_close_data_folder_pane, "secondary")
+        version_header.addWidget(self._btn_close_data_folder_pane)
         left_layout.addLayout(version_header)
 
         self._data_tree = QTreeWidget()
@@ -403,6 +410,9 @@ class DetectPoseView(TaskView):
             self._on_data_folder_context_menu
         )
         self._btn_add_data_folder.clicked.connect(self._on_add_data_folder)
+        self._btn_close_data_folder_pane.clicked.connect(
+            self._close_data_folder_pane
+        )
 
         # Canvas signals
         self._canvas.annotation_selected.connect(self._on_annotation_selected)
@@ -458,6 +468,13 @@ class DetectPoseView(TaskView):
         self._left_pane.setVisible(True)
         total = max(600, self.width())
         self._splitter.setSizes([260, max(240, total - 560), 292])
+        self.file_list_visibility_changed.emit(True)
+
+    def _close_data_folder_pane(self) -> None:
+        """收起左侧数据版本与图片列表抽屉。"""
+        self._left_pane.hide()
+        self.file_list_visibility_changed.emit(False)
+        self._emit_status()
 
     def toggle_file_list(self) -> None:
         """显示 / 隐藏左侧数据版本 + 文件列表抽屉 (Ctrl+L)。"""
@@ -466,6 +483,7 @@ class DetectPoseView(TaskView):
         if visible:
             total = max(600, self.width())
             self._splitter.setSizes([260, max(240, total - 580), 292])
+        self.file_list_visibility_changed.emit(visible)
         self._emit_status()
 
     def set_active_data_folder(self, folder: str) -> None:
