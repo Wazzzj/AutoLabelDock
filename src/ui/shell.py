@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Callable
 
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QPoint
-from PyQt5.QtGui import QColor, QPainter, QPen, QFont
+from PyQt5.QtGui import QColor, QFontMetrics, QPainter, QPen, QFont
 from PyQt5.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -296,13 +296,39 @@ class TopBar(QWidget):
             "#TopBar{background:transparent;border:none;}"
             "#TopChip{background:%s;border:1px solid %s;border-radius:7px;"
             "padding:4px 10px;color:%s;font-size:11.5px;}"
-            % (PALETTE["bg"], PALETTE["line"], PALETTE["text_muted"])
+            "#ProjectBadge{background:%s;border-radius:6px;color:%s;"
+            "font-size:10px;font-weight:700;}"
+            "#ProjectName{color:%s;font-size:13px;font-weight:700;}"
+            % (PALETTE["bg"], PALETTE["line"], PALETTE["text_muted"],
+               PALETTE["primary_soft"], PALETTE["primary"], PALETTE["text"])
         )
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 6, 12, 6)
         layout.setSpacing(8)
-        layout.addStretch(1)
+
+        self._project_context = QWidget(self)
+        context_layout = QHBoxLayout(self._project_context)
+        context_layout.setContentsMargins(0, 0, 0, 0)
+        context_layout.setSpacing(7)
+        self._project_badge = QLabel(self._project_context)
+        self._project_badge.setObjectName("ProjectBadge")
+        self._project_badge.setFixedSize(26, 26)
+        self._project_badge.setAlignment(Qt.AlignCenter)
+        self._project_name_label = QLabel(self._project_context)
+        self._project_name_label.setObjectName("ProjectName")
+        self._project_name_label.setMinimumWidth(0)
+        self._project_name_label.setSizePolicy(
+            QSizePolicy.Ignored, QSizePolicy.Preferred
+        )
+        context_layout.addWidget(self._project_badge)
+        context_layout.addWidget(self._project_name_label, 1)
+        self._project_context.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Preferred
+        )
+        self._project_name_full = ""
+        self._project_context.hide()
+        layout.addWidget(self._project_context, 1)
 
         self._device_chip = QLabel(self)
         self._device_chip.setObjectName("TopChip")
@@ -323,6 +349,51 @@ class TopBar(QWidget):
 
     def set_version(self, text: str) -> None:
         self._version_chip.setText(text)
+
+    def set_project_context(self, name: str, task_type: str) -> None:
+        """Show the current project identity in the shell's left context slot."""
+        clean_name = str(name or "").strip()
+        if not clean_name:
+            self.clear_project_context()
+            return
+        self._project_badge.setText(clean_name[:2])
+        self._project_badge.setToolTip(clean_name)
+        self._project_name_full = clean_name
+        self._project_name_label.setText(clean_name)
+        self._project_name_label.setToolTip(clean_name)
+        self._project_context.show()
+        if self.isVisible():
+            QTimer.singleShot(0, self._elide_project_name)
+
+    def clear_project_context(self) -> None:
+        """Hide and reset the current-project identity in the shell."""
+        self._project_name_full = ""
+        self._project_badge.clear()
+        self._project_badge.setToolTip("")
+        self._project_name_label.clear()
+        self._project_name_label.setToolTip("")
+        self._project_context.hide()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if self._project_context.isVisible():
+            QTimer.singleShot(0, self._elide_project_name)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if self._project_context.isVisible():
+            QTimer.singleShot(0, self._elide_project_name)
+
+    def _elide_project_name(self) -> None:
+        if not self._project_name_full:
+            return
+        available_width = self._project_name_label.contentsRect().width()
+        if available_width <= 0:
+            return
+        text = QFontMetrics(self._project_name_label.font()).elidedText(
+            self._project_name_full, Qt.ElideRight, available_width
+        )
+        self._project_name_label.setText(text)
 
 
 # ────────────────────────────────────────────────────────────
