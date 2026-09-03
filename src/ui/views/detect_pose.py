@@ -1138,7 +1138,7 @@ class DetectPoseView(TaskView):
         """Class set/cleared via the right-side project class list.
 
         cls_name is the class name when set, or None when the user toggled
-        the current default off by re-double-clicking it.
+        the current default off by clicking it again.
         """
         self._last_class = cls_name
         if cls_name:

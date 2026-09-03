@@ -5,12 +5,13 @@ from unittest.mock import Mock, patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt5.QtCore import QTimer, Qt
+from PyQt5.QtGui import QFont, QFontMetrics
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QApplication, QDialog, QLabel, QMessageBox
 
 from src.core.annotation import Annotation
 from src.ui.class_picker import ClassPickerPopup, KeypointLabelPicker
-from src.ui.properties import AnnotationPanel
+from src.ui.properties import AnnotationPanel, _AnnCardDelegate
 from src.ui.views.detect_pose import DetectPoseView
 from src.utils.image import ImageCache
 
@@ -83,6 +84,36 @@ def test_annotation_inspector_matches_card_and_class_list_design():
     panel.default_class_changed.connect(selected.append)
     QTest.mouseClick(first_class, Qt.LeftButton)
     assert selected == ["bolt"]
+    panel.close()
+
+
+def test_annotation_list_expands_and_elides_text_at_inspector_width():
+    """“全部展开”展示更多标注，长文本仍保留右侧信息的安全空间。"""
+    panel = AnnotationPanel()
+    panel.resize(292, 760)
+    panel.set_classes(["very-long-class-name-that-must-not-create-a-scrollbar"])
+    panel.set_annotations([
+        Annotation(class_name=f"very-long-class-name-{index}", class_id=index,
+                   bbox=(0.5, 0.5, 0.2, 0.2))
+        for index in range(4)
+    ], image_size=(1000, 1000))
+    panel.show()
+    _QT_APP.processEvents()
+    collapsed_height = panel._ann_tree.height()
+
+    assert panel._classes_list.horizontalScrollBar().maximum() == 0
+    class_row = panel._classes_list.itemWidget(panel._classes_list.item(0))
+    assert class_row.findChild(QLabel, "name_lbl").width() > 0
+
+    panel._expand_annotation_tree()
+    _QT_APP.processEvents()
+
+    assert panel._ann_tree.height() > collapsed_height
+    font = QFont()
+    long_text = "very-long-class-name-that-must-not-overlap-confidence"
+    rendered = _AnnCardDelegate._elided_text(font, long_text, 80)
+    assert rendered != long_text
+    assert QFontMetrics(font).horizontalAdvance(rendered) <= 80
     panel.close()
 
 

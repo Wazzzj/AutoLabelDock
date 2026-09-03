@@ -20,7 +20,7 @@ from PyQt5.QtWidgets import (
     QStyledItemDelegate,
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QRect, QSize, QPoint
-from PyQt5.QtGui import QColor, QPixmap, QIcon, QPainter, QPen, QFont
+from PyQt5.QtGui import QColor, QPixmap, QIcon, QPainter, QPen, QFont, QFontMetrics
 
 from src.core.annotation import Annotation, annotation_area_text
 from src.ui.collapsible_group import CollapsibleGroupBox
@@ -62,6 +62,11 @@ class _AnnCardDelegate(QStyledItemDelegate):
     CONFIDENCE_ROLE = Qt.UserRole + 3
     STATE_ROLE = Qt.UserRole + 4  # bool 已确认
 
+    @staticmethod
+    def _elided_text(font: QFont, text: str, width: int) -> str:
+        """Keep card copy within its reserved lane at narrow inspector widths."""
+        return QFontMetrics(font).elidedText(str(text), Qt.ElideRight, max(0, width))
+
     def paint(self, painter, option, index):
         shape = index.data(self.CARD_ROLE)
         if not shape:
@@ -99,12 +104,19 @@ class _AnnCardDelegate(QStyledItemDelegate):
         f1 = QFont(option.font)
         f1.setPixelSize(13)
         f1.setWeight(QFont.DemiBold)
-        painter.setFont(f1)
-        painter.setPen(QColor(PALETTE["text"]))
-        painter.drawText(QPoint(name_x, rect.top() + 22), name)
-
         confidence = index.data(self.CONFIDENCE_ROLE) or "—"
         confidence_rect = QRect(rect.right() - 66, rect.top() + 8, 34, 20)
+        name_rect = QRect(
+            name_x, rect.top() + 8,
+            max(0, confidence_rect.left() - name_x - 8), 20,
+        )
+        painter.setFont(f1)
+        painter.setPen(QColor(PALETTE["text"]))
+        painter.drawText(
+            name_rect, Qt.AlignLeft | Qt.AlignVCenter,
+            self._elided_text(f1, name, name_rect.width()),
+        )
+
         f_conf = QFont(option.font)
         f_conf.setPixelSize(11)
         f_conf.setFamily("Menlo")
@@ -118,7 +130,14 @@ class _AnnCardDelegate(QStyledItemDelegate):
         f2.setFamily("Menlo")
         painter.setFont(f2)
         painter.setPen(QColor(PALETTE["text_subtle"]))
-        painter.drawText(QPoint(name_x, rect.bottom() - 12), shape)
+        shape_rect = QRect(
+            name_x, rect.top() + 31,
+            max(0, rect.right() - 38 - name_x - 8), 18,
+        )
+        painter.drawText(
+            shape_rect, Qt.AlignLeft | Qt.AlignVCenter,
+            self._elided_text(f2, shape, shape_rect.width()),
+        )
 
         # 右侧状态圈
         confirmed = index.data(self.STATE_ROLE)
@@ -157,7 +176,7 @@ class AnnotationPanel(QWidget):
         keypoint_rename_requested(str, int, str): (ann_id, kp_idx, new_label).
         keypoint_visibility_requested(str, int): (ann_id, kp_idx) — cycle visibility.
         keypoint_delete_requested(str, int): (ann_id, kp_idx).
-        default_class_changed(str): Class name double-clicked in the project class
+        default_class_changed(str): Class name clicked in the project class
             list — caller should treat this as the new default for drawing.
     """
 
@@ -190,6 +209,7 @@ class AnnotationPanel(QWidget):
         self._class_colors: dict[str, str] = {}
         self._project_class_counts: dict[str, int] = {}
         self._default_class: str | None = None
+        self._ann_list_expanded = False
         self._init_ui()
 
     def _init_ui(self) -> None:
@@ -222,7 +242,7 @@ class AnnotationPanel(QWidget):
         self._ann_tree.setHeaderHidden(True)
         self._ann_tree.setIndentation(12)
         self._ann_tree.setMinimumHeight(44)
-        self._ann_tree.setMaximumHeight(220)
+        self._ann_tree.setMaximumHeight(380)
         # 卡片外观完全由 _AnnCardDelegate 绘制；branch 用不透明深底压掉选中填充
         self._ann_tree.setStyleSheet(
             "QTreeWidget{background:transparent;border:none;}"
@@ -283,6 +303,7 @@ class AnnotationPanel(QWidget):
             "QListWidget{background:transparent;border:none;}"
             "QListWidget::item{margin:0;padding:0px;}"
         )
+        self._classes_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         cls_layout.addWidget(self._classes_list, 0)
         # （设计稿：去掉类别提示文字）
         outer.addWidget(cls_box)
@@ -400,7 +421,9 @@ class AnnotationPanel(QWidget):
         return box, v
 
     def _expand_annotation_tree(self) -> None:
+        self._ann_list_expanded = True
         self._ann_tree.expandAll()
+        self._sync_annotation_tree_height()
 
     def set_classes(self, classes: list[str]) -> None:
         """Set the project's class list (drives the project class panel)."""
@@ -423,7 +446,8 @@ class AnnotationPanel(QWidget):
             visible_rows += 1
             if top.isExpanded():
                 visible_rows += top.childCount()
-        rows = max(1, min(visible_rows, 3))
+        row_limit = visible_rows if self._ann_list_expanded else min(visible_rows, 3)
+        rows = max(1, row_limit)
         row_h = self._ann_tree.sizeHintForRow(0)
         if row_h <= 0:
             row_h = 24
@@ -837,6 +861,8 @@ class AnnotationPanel(QWidget):
             "QWidget QLabel{background:transparent;border:none;}"
         )
         name_lbl = QLabel(cls_name)
+        name_lbl.setMinimumWidth(0)
+        name_lbl.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         f = name_lbl.font()
         f.setUnderline(False)
         name_lbl.setFont(f)
@@ -849,8 +875,7 @@ class AnnotationPanel(QWidget):
         count_lbl.setObjectName("count_lbl")
 
         hl.addWidget(swatch)
-        hl.addWidget(name_lbl)
-        hl.addStretch(1)
+        hl.addWidget(name_lbl, 1)
         hl.addWidget(count_lbl)
         return row
 
@@ -866,7 +891,10 @@ class AnnotationPanel(QWidget):
             row = self._make_class_row(idx, cls_name, color)
             hint = row.sizeHint()
             hint.setHeight(max(20, hint.height() + 2))
-            item.setSizeHint(hint)
+            # The inspector is a 292px-wide fixed rail; a bounded item width
+            # keeps long class names from creating a horizontal scrollbar
+            # while leaving the label its share of the row.
+            item.setSizeHint(QSize(240, hint.height()))
             self._classes_list.setItemWidget(item, row)
         self._classes_list.blockSignals(False)
         # 最多展示 4 个类别，多于 4 个时右侧出现滚动条
