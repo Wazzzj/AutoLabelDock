@@ -14,6 +14,7 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QToolButton,
     QComboBox,
+    QListView,
     QLineEdit,
     QSpinBox,
     QDoubleSpinBox,
@@ -367,6 +368,27 @@ class TrainPanel(QWidget):
         # ── Task config ──
         task_group, task_form = self._create_param_group("任务配置", expanded=True)
         self._task_combo = QComboBox()
+        self._task_combo.setObjectName("trainTaskCombo")
+        task_popup = QListView(self._task_combo)
+        task_popup.setObjectName("trainTaskPopup")
+        task_popup.setStyleSheet(
+            "QListView#trainTaskPopup {"
+            f" background:{PALETTE['panel_alt']};"
+            f" color:{PALETTE['text']};"
+            f" border:1px solid {PALETTE['line_strong']};"
+            " border-radius:8px; padding:4px; outline:none;"
+            "}"
+            "QListView#trainTaskPopup::item {"
+            " min-height:30px; padding:0 10px; border-radius:5px;"
+            "}"
+            "QListView#trainTaskPopup::item:hover {"
+            f" background:{PALETTE['panel_raised']};"
+            "}"
+            "QListView#trainTaskPopup::item:selected {"
+            f" background:{PALETTE['primary']}; color:#FFFFFF;"
+            "}"
+        )
+        self._task_combo.setView(task_popup)
         self._task_combo.addItems(["detect", "segment", "obb", "classify", "pose"])
         task_form.addRow("任务类型:", self._task_combo)
 
@@ -388,17 +410,27 @@ class TrainPanel(QWidget):
         self._model_size_combo.setFixedWidth(64)
         model_layout.addWidget(self._model_size_combo)
 
+        # Internal selection state: the visible control is the path field below.
         self._model_combo = QComboBox()
         self._model_combo.setEditable(True)
         self._model_combo.addItem("")
-
-        self._btn_browse_model = QPushButton("浏览...")
-        self._btn_browse_model.setToolTip("从本地选择 YOLO 预训练模型")
-        self._btn_browse_model.setFixedWidth(72)
-        set_button_role(self._btn_browse_model, "secondary")
-        model_layout.addWidget(self._btn_browse_model)
-
         task_form.addRow("基础模型:", model_row)
+
+        existing_model_row = QWidget()
+        existing_model_layout = QHBoxLayout(existing_model_row)
+        existing_model_layout.setContentsMargins(0, 0, 0, 0)
+        existing_model_layout.setSpacing(6)
+        self._btn_choose_existing_model = QPushButton("选择已有模型")
+        self._btn_choose_existing_model.setToolTip("选择本机或项目中的已有模型文件")
+        self._btn_choose_existing_model.setFixedHeight(28)
+        set_button_role(self._btn_choose_existing_model, "secondary")
+        existing_model_layout.addWidget(self._btn_choose_existing_model)
+        self._selected_model_path = QLineEdit()
+        self._selected_model_path.setReadOnly(True)
+        self._selected_model_path.setPlaceholderText("未选择（将使用上方基础模型）")
+        self._selected_model_path.setToolTip("未选择已有模型文件")
+        existing_model_layout.addWidget(self._selected_model_path, 1)
+        task_form.addRow("已有模型:", existing_model_row)
 
         self._device_combo = QComboBox()
         self._device_combo.addItems(list(_DEVICE_OPTIONS.keys()))
@@ -1188,7 +1220,7 @@ class TrainPanel(QWidget):
 
     def _connect_signals(self) -> None:
         self._task_combo.currentTextChanged.connect(self._on_task_changed)
-        self._btn_browse_model.clicked.connect(self._choose_base_model)
+        self._btn_choose_existing_model.clicked.connect(self._choose_existing_model)
         self._preset_combo.currentTextChanged.connect(self._on_preset_changed)
         self._freeze_default_check.toggled.connect(self._on_freeze_default_toggled)
         self._btn_start.clicked.connect(self._on_start)
@@ -1335,8 +1367,8 @@ class TrainPanel(QWidget):
             or path.is_file()
         )
 
-    def _choose_base_model(self) -> None:
-        """Open a file dialog and put the selected model into the combo box."""
+    def _choose_existing_model(self) -> None:
+        """Select an existing model file and use it as the training base."""
         current_text = self._model_combo.currentText().strip()
         start_dir = Path.home()
 
@@ -1374,10 +1406,18 @@ class TrainPanel(QWidget):
     def _update_model_tooltip(self) -> None:
         """Show the resolved model path/name without truncation."""
         model_value = self._resolve_model_path().strip()
-        tip = model_value or "请选择基础模型版本和尺寸，或点击浏览选择本地模型"
+        tip = model_value or "请选择基础模型版本和尺寸，或选择已有模型文件"
         self._model_version_combo.setToolTip(tip)
         self._model_size_combo.setToolTip(tip)
-        self._btn_browse_model.setToolTip(tip)
+        selected_value = self._model_combo.currentText().strip()
+        selected_path = self._registered_model_paths.get(selected_value, selected_value)
+        self._selected_model_path.setText(selected_path)
+        self._selected_model_path.setToolTip(
+            selected_path or "未选择已有模型文件"
+        )
+        self._btn_choose_existing_model.setToolTip(
+            selected_path or "选择本机或项目中的已有模型文件"
+        )
 
     def _on_preset_changed(self, preset_name: str) -> None:
         """Apply a preset/template to all UI fields."""
@@ -1492,6 +1532,12 @@ class TrainPanel(QWidget):
     def _apply_model_value(self, value: str) -> None:
         value = value.strip()
         if not value:
+            return
+        # A selected model file path must stay a path even when its filename
+        # looks like an official preset such as ``yolov8n.pt``.
+        if self._looks_like_local_model(value):
+            self._model_combo.setCurrentText(value)
+            self._update_model_tooltip()
             return
         stem = Path(value).stem
         for version, prefix in _MODEL_VERSION_PREFIX.items():
