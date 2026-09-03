@@ -16,6 +16,7 @@ from PyQt5.QtWidgets import (
     QInputDialog,
     QFrame,
     QPushButton,
+    QToolButton,
     QStyle,
     QStyledItemDelegate,
 )
@@ -25,6 +26,7 @@ from PyQt5.QtGui import QColor, QPixmap, QIcon, QPainter, QPen, QFont, QFontMetr
 from src.core.annotation import Annotation, annotation_area_text
 from src.ui.collapsible_group import CollapsibleGroupBox
 from src.ui.tag_widget import TagChipBar
+from src.ui.icons import icon
 from src.ui.theme import PALETTE, set_button_role, text_style
 
 
@@ -221,6 +223,7 @@ class AnnotationPanel(QWidget):
         self._outer_layout = outer
         self._sections: dict[str, QWidget] = {}
         self._section_titles: dict[str, QLabel] = {}
+        self._section_actions: dict[str, QWidget] = {}
 
         # ── 当前图片（设计稿：单富文本表格，键列 76px，无边框线） ──
         cur_box, cur_lay = self._flat_section("当前图片", "在新窗口预览",
@@ -313,8 +316,11 @@ class AnnotationPanel(QWidget):
         self._sections["类别"] = cls_box
 
         # ── 数据版本 ──
-        ver_box, ver_layout = self._flat_section("数据版本", "管理",
-                                                 self.manage_data_folders_requested)
+        ver_box, ver_layout = self._flat_section(
+            "数据版本", "管理", self.manage_data_folders_requested,
+            right_button=True,
+        )
+        self._data_version_manage_button = self._section_actions["数据版本"]
         self._version_list = QListWidget()
         self._version_list.setMaximumHeight(132)
         self._version_list.setStyleSheet(
@@ -395,7 +401,7 @@ class AnnotationPanel(QWidget):
         self._sync_annotation_tree_height()
 
     def _flat_section(self, title: str, right: str | None = None,
-                      right_signal=None):
+                      right_signal=None, right_button: bool = False):
         """设计稿扁平分区：小标题（+右侧链接）+ 内容 + 1px 底部分隔线。"""
         box = QWidget(self)
         box.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
@@ -410,13 +416,32 @@ class AnnotationPanel(QWidget):
         self._section_titles[title] = t
         head.addWidget(t)
         if right:
-            r = QLabel(right)
-            r.setStyleSheet(
-                f"color:{PALETTE['text_subtle']};font-size:13px;font-weight:600;"
-                "border:none;background:transparent;")
-            if right_signal is not None:
+            if right_button:
+                r = QToolButton(box)
+                r.setText(right)
+                r.setIcon(icon("open_project", PALETTE["primary"], 14))
+                r.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+                r.setFixedHeight(24)
                 r.setCursor(Qt.PointingHandCursor)
-                r.mouseReleaseEvent = lambda ev, sg=right_signal: sg.emit()
+                r.setToolTip("打开数据版本与图片列表")
+                r.setStyleSheet(
+                    "QToolButton{background:" + PALETTE["primary_soft"]
+                    + ";border:1px solid " + PALETTE["line_strong"]
+                    + ";border-radius:6px;padding:0 7px;color:" + PALETTE["primary"]
+                    + ";font-size:11px;font-weight:700;}"
+                    "QToolButton:hover{background:" + PALETTE["panel_alt"]
+                    + ";border-color:" + PALETTE["primary"] + ";}")
+                if right_signal is not None:
+                    r.clicked.connect(right_signal.emit)
+            else:
+                r = QLabel(right)
+                r.setStyleSheet(
+                    f"color:{PALETTE['text_subtle']};font-size:13px;font-weight:600;"
+                    "border:none;background:transparent;")
+                if right_signal is not None:
+                    r.setCursor(Qt.PointingHandCursor)
+                    r.mouseReleaseEvent = lambda ev, sg=right_signal: sg.emit()
+            self._section_actions[title] = r
             head.addStretch(1)
             head.addWidget(r)
         v.addLayout(head)

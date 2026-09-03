@@ -6,10 +6,12 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QApplication, QMessageBox
+from PyQt5.QtTest import QTest
+from PyQt5.QtWidgets import QApplication, QMessageBox, QToolButton
 
 from src.core.project import ProjectManager
 from src.ui.properties import AnnotationPanel
+from src.ui.shell import TopBar
 from src.ui.views.detect_pose import DetectPoseView
 from src.utils.image import ImageCache
 
@@ -33,6 +35,25 @@ def test_inspector_sections_stay_top_aligned_when_space_is_available():
 
     assert panel._outer_layout.alignment() & Qt.AlignTop
     panel.close()
+
+
+def test_project_context_and_data_version_manage_action_are_prominent():
+    top_bar = TopBar()
+    top_bar.set_project_context("胶环密封检测", "segment")
+    assert top_bar._project_name_label.text() == "胶环密封检测"
+    assert top_bar._task_type_chip.text() == "segment"
+    assert top_bar._project_badge.text() == "胶环"
+
+    panel = AnnotationPanel()
+    emitted = []
+    panel.manage_data_folders_requested.connect(lambda: emitted.append(True))
+    button = panel._data_version_manage_button
+    assert isinstance(button, QToolButton)
+    assert button.text() == "管理"
+    QTest.mouseClick(button, Qt.LeftButton)
+    assert emitted == [True]
+    panel.close()
+    top_bar.close()
 
 
 def test_all_images_card_is_centered_and_root_menu_has_all_actions(tmp_path):

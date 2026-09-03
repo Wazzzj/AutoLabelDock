@@ -984,6 +984,9 @@ class MainWindow(QMainWindow):
         # depend on the controller's internal _project reference.
         self._project_ctrl._project = project_manager
         self.setWindowTitle(f"AutoLabel Dock — {project_manager.config.name}")
+        self._top_bar.set_project_context(
+            project_manager.config.name, project_manager.config.task_type
+        )
         self._set_project_dir_label(project_manager.project_dir)
         try:
             self._maybe_apply_detected_project_data(project_manager)

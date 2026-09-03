@@ -296,12 +296,37 @@ class TopBar(QWidget):
             "#TopBar{background:transparent;border:none;}"
             "#TopChip{background:%s;border:1px solid %s;border-radius:7px;"
             "padding:4px 10px;color:%s;font-size:11.5px;}"
-            % (PALETTE["bg"], PALETTE["line"], PALETTE["text_muted"])
+            "#ProjectBadge{background:%s;border-radius:6px;color:%s;"
+            "font-size:10px;font-weight:700;}"
+            "#ProjectName{color:%s;font-size:13px;font-weight:700;}"
+            "#TaskTypeChip{background:%s;border-radius:5px;color:%s;"
+            "padding:3px 7px;font-size:10px;font-family:Menlo,'SF Mono',monospace;}"
+            % (PALETTE["bg"], PALETTE["line"], PALETTE["text_muted"],
+               PALETTE["primary_soft"], PALETTE["primary"], PALETTE["text"],
+               PALETTE["panel_alt"], PALETTE["primary"])
         )
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 6, 12, 6)
         layout.setSpacing(8)
+
+        self._project_context = QWidget(self)
+        context_layout = QHBoxLayout(self._project_context)
+        context_layout.setContentsMargins(0, 0, 0, 0)
+        context_layout.setSpacing(7)
+        self._project_badge = QLabel(self._project_context)
+        self._project_badge.setObjectName("ProjectBadge")
+        self._project_badge.setFixedSize(26, 26)
+        self._project_badge.setAlignment(Qt.AlignCenter)
+        self._project_name_label = QLabel(self._project_context)
+        self._project_name_label.setObjectName("ProjectName")
+        self._task_type_chip = QLabel(self._project_context)
+        self._task_type_chip.setObjectName("TaskTypeChip")
+        context_layout.addWidget(self._project_badge)
+        context_layout.addWidget(self._project_name_label)
+        context_layout.addWidget(self._task_type_chip)
+        self._project_context.hide()
+        layout.addWidget(self._project_context)
         layout.addStretch(1)
 
         self._device_chip = QLabel(self)
@@ -323,6 +348,19 @@ class TopBar(QWidget):
 
     def set_version(self, text: str) -> None:
         self._version_chip.setText(text)
+
+    def set_project_context(self, name: str, task_type: str) -> None:
+        """Show the current project identity in the shell's left context slot."""
+        clean_name = str(name or "").strip()
+        if not clean_name:
+            self._project_context.hide()
+            return
+        self._project_badge.setText(clean_name[:2])
+        self._project_badge.setToolTip(clean_name)
+        self._project_name_label.setText(clean_name)
+        self._project_name_label.setToolTip(clean_name)
+        self._task_type_chip.setText(str(task_type or "").strip().casefold())
+        self._project_context.show()
 
 
 # ────────────────────────────────────────────────────────────
